@@ -141,6 +141,7 @@ Here is a fibonacci function implemented in NoobC
     }
 
 ```
+If ncc is compiled with all g++/clang++ optimization on. This code execution finishes within 0.45s
 
 
 ## Where to start?
