@@ -8,7 +8,7 @@ touch of python. Very easy to learn and use. And also it is fast.
 Very C like syntax, with some strict syntax rules.
 
 ## Data types
-```
+```go
     var character = 'a';
     var interger = 100;
     var float = 100.0; // Floating points have to have a radix point an a single digit after it
@@ -46,7 +46,7 @@ runtime error)
 
 
 ## Variable declaration
-```
+```go
     // Global scpope
     var variable;// By default it will be initialised to nil
 
@@ -59,7 +59,7 @@ runtime error)
 ``` 
 
 ## Conditional statements
-```
+```go
     var a = 12;
     if (a > 0) {     // Braces are must. If braces are omitted, it will be a syntax error
         print("positive number\n");
@@ -72,7 +72,7 @@ runtime error)
 ```
 
 ## Control Statements
-```
+```go
     for (var i = 0; i < 100; i = i + 1) {   // As like if conditionals, braces are must
         ;   // This semicolon can be omitted. Body of the for loop can be empty.
     }
@@ -87,7 +87,7 @@ runtime error)
 
 ## Functions
 
-```
+```go
    // Functions are always defined with 'func' keyword
    // Argument list can be empty. If contains any argument, only the name of the argument is required.
     func fib(n) {
@@ -100,10 +100,10 @@ runtime error)
 
 ```
 
-## Builin Functions
+## Builtin Functions
 
-```
-    func main() {
+```go
+    func main() {       // execution always starts from main function
         var a;
 
         // To print expressions, expression has to be inside curly braces.
@@ -122,6 +122,25 @@ runtime error)
 
 ```
 (``NOTE``: String inputs are not supported yet)
+
+
+## How Fast is it?
+
+Here is a fibonacci function implemented in NoobC
+```go
+    func fib(n) {
+        if (n < 2) {
+            return n;
+        }
+
+        return fib(n - 1) + fib(n - 2);
+    }
+
+    func main() {
+        print("30th fibonacci is: {fib(30)}\n");
+    }
+
+```
 
 
 ## Where to start?
