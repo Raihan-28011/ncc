@@ -2850,7 +2850,7 @@ bool interpret() {
 int main(int argc, char **argv) {
     if (argc > 1) {
         auto len = std::strlen(argv[1]);
-        if (argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
+        if (len > 4 && argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
             read_file(argv[1]);
             save_all_lines();
 
