@@ -39,7 +39,7 @@ Very C like syntax, with some strict syntax rules.
     - Unary Operators
         - - (expects integer or double)
         - + (same as unary '-')
-        - ~ (defined for all type od data) 
+        - ! (defined for all type od data) 
 
 (``NOTE``: All binary operators expectes both operand to be of same type. Otherwise it is a
 runtime error)
