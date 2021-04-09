@@ -2849,12 +2849,18 @@ bool interpret() {
 
 int main(int argc, char **argv) {
     if (argc > 1) {
-        read_file(argv[1]);
-        save_all_lines();
+        auto len = std::strlen(argv[1]);
+        if (argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
+            read_file(argv[1]);
+            save_all_lines();
 
-        if (argc > 2) {
-            if (std::strlen(argv[2]) == 2 && std::strncmp(argv[2], "-d", 2) == 0)
-                show_opcodes = true;
+            if (argc > 2) {
+                if (std::strlen(argv[2]) == 2 && std::strncmp(argv[2], "-d", 2) == 0)
+                    show_opcodes = true;
+            }
+        } else {
+            std::fprintf(stderr, "ncc: " BOLD_RED "error" NORMAL ": unknown file format. Only files with extension 'nc' are supported\n");
+            return EXIT_FAILURE;
         }
     } else {
         std::fprintf(stderr, "usage: ncc FILE\n");
