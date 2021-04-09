@@ -1,0 +1,8 @@
+/debug-build
+/release-build
+/.cache
+/.idea
+/.vs
+/.vscode
+/Session.vim
+/compile_commands.json
