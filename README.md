@@ -215,6 +215,7 @@ If ncc is compiled with all g++/clang++ optimization on. This code execution fin
 
 This is a total mess. I haven't yet organised the code base. But here is a rough sketch of
 how to inspect the code
+```
     - main()
     - interpret()
         - compile()
@@ -224,5 +225,5 @@ how to inspect the code
                     - parse_variable_declaration()
                     - parse_statement()
         - run_vm()
-
+```
 All compilation happens in compile command and runtime starts at run_vm() function.
