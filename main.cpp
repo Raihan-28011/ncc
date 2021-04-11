@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cmath>
 #include <chrono>
+#include <algorithm>
 
 /* ---------------- aliases ----------------- */
 using u8_t = std::uint8_t;
@@ -39,6 +40,7 @@ enum TokenKind {
     Plus, Minus, Star, Slash,
     LeftParen, RightParen,
     LeftBrace, RightBrace,
+    LeftSquare, RightSquare,
     LessThan, LessEqual, GreaterThan,
     GreaterEqual, Equal, EqualEqual,
     LogicalAnd, LogicalOr,
@@ -54,8 +56,10 @@ enum TokenKind {
     Get_C, Get_I,
     Get_S, Get_D, Get_B,
     Func,
+    String_Type,
     Identifier,
     FuncIdentifier,
+    Reference,
     Eof, Error,
     Unrecognized
 };
@@ -66,6 +70,7 @@ constexpr char const *tokens[] = {
     "+", "-", "*", "/",
     "(", ")",
     "{", "}",
+    "[", "]",
     "<", "<=", ">",
     ">=", "=", "==",
     "&&", "||",
@@ -83,6 +88,7 @@ constexpr char const *tokens[] = {
     "func",
     "identifier",
     "function name",
+    "&",
     "Eof", "Error"
 };
 
@@ -134,12 +140,39 @@ enum OpCode {
     get_i,
     get_s,
     get_d,
+    local_get_c_ref,
+    local_get_i_ref,
+    local_get_s_ref,
+    local_get_d_ref,
+    /*get_c_ref,*/
+    /*get_i_ref,*/
+    /*get_s_ref,*/
+    /*get_d_ref,*/
     define_global,
     define_local,
     set_global,
     get_global,
     set_local,
     get_local,
+    load_local_ref,
+    get_local_ref,
+    set_local_ref,
+    load_global_ref,
+    get_global_ref,
+    set_global_ref,
+
+    define_local_array,
+    get_local_array,
+    set_local_array,
+    
+    local_array_get_c,
+    local_array_get_i,
+    local_array_get_d,
+
+    set_string,
+    set_string_index,
+    get_string,
+
     store_ret_value,
     load_ret_value,
     ret,
@@ -189,12 +222,37 @@ constexpr char const *instructions[] = {
     "get_i",
     "get_s",
     "get_d",
+    "local_get_c_ref",
+    "local_get_i_ref",
+    "local_get_s_ref",
+    "local_get_d_ref",
+    /*"get_c_ref",*/
+    /*"get_i_ref",*/
+    /*"get_s_ref",*/
+    /*"get_d_ref",*/
     "define_global",
     "define_local",
     "set_global",
     "get_global",
     "set_local",
     "get_local",
+    "load_local_ref",
+    "get_local_ref",
+    "set_local_ref",
+    "load_global_ref",
+    "get_global_ref",
+    "set_global_ref",
+    "define_local_array",
+    "get_local_array",
+    "set_local_array",
+    "local_array_get_c",
+    "local_array_get_i",
+    "local_array_get_d",
+
+    "set_string",
+    "set_string_index",
+    "get_string",
+
     "store_ret_value",
     "load_ret_value",
     "ret",
@@ -315,13 +373,35 @@ struct Value {
         }
     }
 
+    static void escaped_character(FILE *des, char c) {
+        switch (c) {
+            case '\a': std::fprintf(stderr, "'\\a'"); break;
+            case '\b': std::fprintf(stderr, "'\\b'"); break;
+            case '\v': std::fprintf(stderr, "'\\v'"); break;
+            case '\t': std::fprintf(stderr, "'\\t'"); break;
+            case '\\':std::fprintf(stderr, " '\\"); break;
+            case '\'':std::fprintf(stderr, " '\'"); break;
+            case '\n': std::fprintf(stderr, "'\\n'"); break;
+            case '\"': std::fprintf(stderr, "'\"'"); break;
+            case '\r': std::fprintf(stderr, "'\\r'"); break;
+            case '\f': std::fprintf(stderr, "'\\f'"); break;
+            case '\0': std::fprintf(stderr, "'\\0'"); break;
+            default:
+                std::fputc(c, stderr);
+                break;
+        }
+    }
+
     void print(FILE *des = stdout, bool escape = true) {
         switch (_kind) {
             case Int_v:
                 std::fprintf(des, "%lld", static_cast<long long>( _val.integer));
                 break;
             case Char_v:
-                std::fprintf(des, "%c", _val.charcter);
+                if (escape)
+                    std::fprintf(des, "%c", _val.charcter);
+                else
+                    escaped_character(des, _val.charcter);
                 break;
             case Double_v:
                 std::fprintf(des, "%.*lF", _val.floats.precision, _val.floats.val);
@@ -394,10 +474,6 @@ i32_t cur_line_length = 0;
 u8_t print_arguments = 0;
 
 
-/*umap<string, Value> globals;*/
-/*vector<string> globals_names;*/
-
-
 struct GlobalSymbolTable {
     GlobalSymbolTable() = default;
 
@@ -438,7 +514,10 @@ struct Variable {
     char const *name;
     i32_t length;
     i32_t index;
-    i32_t scope;
+    u8_t count;
+    i16_t scope;
+    bool reference;
+    bool is_string;
 };
 
 i32_t cur_scope_depth = 0;
@@ -446,17 +525,28 @@ i32_t cur_local_index = 0;
 struct SymbolTable {
     SymbolTable() = default;
 
-    void push(i32_t scope = cur_scope_depth, 
-            char const *name = text, i32_t length = text_len) {
+    u16_t push(i32_t scope = cur_scope_depth, 
+            char const *name = text, i32_t length = text_len, u8_t count = 1) {
         i32_t index = cur_local_index++;
-        variables.push_back(Variable{name, length, index, scope});
+        variables.push_back(Variable{name, length, index, count , i16_t(scope), false, false});
+        return index;
+    }
+
+    u16_t push(i32_t scope, char const *name, i32_t length, u8_t count, i32_t index) {
+        variables.push_back(Variable{name, length, index, count , i16_t(scope), false, false});
+        return index;
+    }
+
+    u16_t push(i32_t scope, char const *name, i32_t length, u8_t count, i32_t index, bool is_string) {
+        variables.push_back(Variable{name, length, index, count , i16_t(scope), false, is_string});
+        return index;
     }
 
     void pop() {
         variables.pop_back();
     }
 
-    bool contains(char const *name, i32_t length, i32_t scope, i32_t &index) {
+    bool contains(char const *name, i32_t length, i32_t scope, i32_t &index, u8_t &count) {
         for (auto var = variables.rbegin(); var != variables.rend(); ++var) {
             if (var->scope < cur_scope_depth)
                 break;
@@ -464,12 +554,27 @@ struct SymbolTable {
             if (var->scope == scope && var->length == length 
                     && std::strncmp(var->name, name, length) == 0) {
                 index = var->index;
+                /* reference = var->reference; */
+                count = var->count;
                 return true;
             }
         }
 
-        push(cur_scope_depth, name, length);
-        index = cur_local_index - 1;
+        index = push(cur_scope_depth, name, length, count);
+        return false;
+    }
+
+    bool contains(i32_t scope, char const *name, i32_t length) {
+        for (auto var = variables.rbegin(); var != variables.rend(); ++var) {
+            if (var->scope < cur_scope_depth)
+                break;
+
+            if (var->scope == scope && var->length == length 
+                    && std::strncmp(var->name, name, length) == 0) {
+                return true;
+            }
+        }
+
         return false;
     }
 
@@ -477,6 +582,31 @@ struct SymbolTable {
         for (auto var = variables.rbegin(); var != variables.rend(); ++var) {
             if (var->length == length && std::strncmp(var->name, name, length) == 0) {
                 index = var->index;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool contains(char const *name, i32_t length, i32_t &index, bool &reference, u8_t &count) {
+        for (auto var = variables.rbegin(); var != variables.rend(); ++var) {
+            if (var->length == length && std::strncmp(var->name, name, length) == 0) {
+                index = var->index;
+                reference = var->reference;
+                count = var->count;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool contains(char const *name, i32_t length, i32_t &index, bool &reference, u8_t &count, bool &is_string) {
+        for (auto var = variables.rbegin(); var != variables.rend(); ++var) {
+            if (var->length == length && std::strncmp(var->name, name, length) == 0) {
+                index = var->index;
+                reference = var->reference;
+                count = var->count;
+                is_string = var->is_string;
                 return true;
             }
         }
@@ -502,17 +632,19 @@ struct Function {
     i32_t length;
     i32_t address;
     i8_t arguments;
+    vector<i8_t> argumets_with_ref;
 };
 
 struct Functions {
     Functions() = default;
 
-    bool defined(char const *name, i32_t length, i32_t &address, i8_t &arguments) {
+    bool defined(char const *name, i32_t length, i32_t &address, i8_t &arguments, vector<i8_t> &refs) {
         for (auto func = functions.begin(); func != functions.end(); ++func) {
             if (func->length == length &&
                     std::strncmp(func->name, name, length) == 0) {
                 address = func->address;
                 arguments = func->arguments;
+                refs = func->argumets_with_ref;
                 return true;
             }
         }
@@ -523,13 +655,15 @@ struct Functions {
     bool defined(char const *name, i32_t length) {
         i32_t address;
         i8_t arguments;
-        return defined(name, length, address, arguments);
+        vector<i8_t> dummy;
+        vector<i8_t> &refs = dummy;
+        return defined(name, length, address, arguments, refs);
     }
 
-    bool declare(char const *name, i32_t length, i32_t address, i8_t arguments) {
+    bool declare(char const *name, i32_t length, i32_t address, i8_t arguments, vector<i8_t> &&refs) {
         if (defined(name, length))
             return false;
-        functions.push_back({name, length, address, arguments});
+        functions.push_back({name, length, address, arguments, std::move(refs)});
         return true;
     }
 
@@ -601,16 +735,16 @@ i16_t get_double_byte_index(i32_t offset) {
 }
 
 void single_byte_instruction(OpCode opcode) {
-    std::fprintf(stderr,"%15s\n", instructions[opcode]);
+    std::fprintf(stderr,"%20s\n", instructions[opcode]);
 }
 
 void double_byte_instruction(OpCode opcode, i32_t offset) {    
-    std::fprintf(stderr, "%15s\t%4d\n", instructions[opcode], code.at(offset));
+    std::fprintf(stderr, "%20s\t%4d\n", instructions[opcode], code.at(offset));
 }
 
 void three_byte_instruction(OpCode opcode, i32_t &offset) {
     auto index = get_double_byte_index(offset);
-    std::fprintf(stderr, "%15s\t%4d\t", instructions[opcode], index);
+    std::fprintf(stderr, "%20s\t%4d\t", instructions[opcode], index);
     values.at(index).print(stderr, false);
     std::fprintf(stderr, "\n");
     offset += 1;
@@ -618,20 +752,20 @@ void three_byte_instruction(OpCode opcode, i32_t &offset) {
 
 void jump_true_false_instruction(OpCode opcode, i32_t &offset) {
     auto index = get_double_byte_index(offset);
-    std::fprintf(stderr, "%15s\t%4d\t%15s\n", instructions[opcode], index, instructions[code.at(index)]);
+    std::fprintf(stderr, "%20s\t%4d\t%15s\n", instructions[opcode], index, instructions[code.at(index)]);
     offset += 1;
 }
 
 void get_globals(OpCode opcode, i32_t &offset) {
     auto index = get_double_byte_index(offset);
     auto val = globals2.objects[index];
-    std::fprintf(stderr, "%15s\t%4d\t%.*s\n", instructions[opcode], index, val.length, val.text);
+    std::fprintf(stderr, "%20s\t%4d\t%.*s\n", instructions[opcode], index, val.length, val.text);
     offset += 1;
 }
 
 void get_locals(OpCode opcode, i32_t &offset) {
     auto index = get_double_byte_index(offset);
-    std::fprintf(stderr, "%15s\t%4d\n", instructions[opcode], index);
+    std::fprintf(stderr, "%20s\t%4d\n", instructions[opcode], index);
     offset += 1;
 }
 
@@ -729,51 +863,84 @@ void disassemble_instruction(i32_t &offset) {
             jump_true_false_instruction(ret_addr, ++offset);
             break;
         case push_arg_addr:
-            std::fprintf(stderr,"%15s\t%4d\n", instructions[push_arg_addr],
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[push_arg_addr],
                     argument_indexes.at(get_double_byte_index(++offset)));
             offset += 1;
             break;
         case pop_arg_addr:
-            std::fprintf(stderr,"%15s\t%4d\n", instructions[pop_arg_addr], get_double_byte_index(++offset));
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[pop_arg_addr], get_double_byte_index(++offset));
             offset += 1;
             break;
         case set_arg_addr:
-            std::fprintf(stderr,"%15s\t%4d\n", instructions[set_arg_addr], get_double_byte_index(++offset));
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[set_arg_addr], get_double_byte_index(++offset));
             offset += 1;
             break;
         case print:
             double_byte_instruction(print, ++offset);
             break;
         case get_c:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[get_c], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_c], get_double_byte_index(++offset));
             offset += 1;
             break;
         case get_i:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[get_i], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_i], get_double_byte_index(++offset));
             offset += 1;
             break;
         case get_s:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[get_s], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_s], get_double_byte_index(++offset));
             offset += 1;
             break;
         case get_d:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[get_d], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_d], get_double_byte_index(++offset));
             offset += 1;
             break;
         case local_get_c:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[local_get_c], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_c], get_double_byte_index(++offset));
             offset += 1;
             break;
         case local_get_i:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[local_get_i], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_i], get_double_byte_index(++offset));
             offset += 1;
             break;
         case local_get_s:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[local_get_s], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[local_get_s], get_double_byte_index(++offset));
             offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
         case local_get_d:
-            std::fprintf(stderr, "%15s\t%4d\n", instructions[local_get_d], get_double_byte_index(++offset));
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_d], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        /*case get_c_ref:*/
+            /*std::fprintf(stderr, "%15s\t%4d\n", instructions[get_c_ref], get_double_byte_index(++offset));*/
+            /*offset += 1;*/
+            /*break;*/
+        /*case get_i_ref:*/
+            /*std::fprintf(stderr, "%15s\t%4d\n", instructions[get_i_ref], get_double_byte_index(++offset));*/
+            /*offset += 1;*/
+            /*break;*/
+        /*case get_s_ref:*/
+            /*std::fprintf(stderr, "%15s\t%4d\n", instructions[get_s_ref], get_double_byte_index(++offset));*/
+            /*offset += 1;*/
+            /*break;*/
+        /*case get_d_ref:*/
+            /*std::fprintf(stderr, "%15s\t%4d\n", instructions[get_d_ref], get_double_byte_index(++offset));*/
+            /*offset += 1;*/
+            /*break;*/
+        case local_get_c_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_c_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case local_get_i_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_i_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case local_get_s_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_s_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case local_get_d_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[local_get_d_ref], get_double_byte_index(++offset));
             offset += 1;
             break;
         case define_global:
@@ -799,6 +966,75 @@ void disassemble_instruction(i32_t &offset) {
             break;
         case load_ret_value:
             single_byte_instruction(load_ret_value);
+            break;
+        case load_local_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[load_local_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case get_local_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_local_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case set_local_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[set_local_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case load_global_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[load_global_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case get_global_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_global_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case set_global_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[set_global_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case define_local_array:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[define_local_array], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case set_local_array:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_local_array], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case get_local_array:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[get_local_array], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case local_array_get_c:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[local_array_get_c], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case local_array_get_i:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[local_array_get_i], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case local_array_get_d:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[local_array_get_d], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case set_string:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_string], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case set_string_index:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_string_index], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case get_string:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[get_string], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
         case ret:
             single_byte_instruction(ret);
@@ -845,6 +1081,12 @@ void emit_jump(OpCode op, i32_t _line = cur_token.line) {
     emit_single_byte(op, _line);
     emit_single_byte(0xff, _line);
     emit_single_byte(0xff, _line);
+}
+
+void emit_array_indexing(OpCode op, i16_t index, u8_t count, i32_t _line = cur_token.line) {
+    emit_single_byte(op, _line);
+    emit_double_byte(as_t<u8_t>(index >> 8), as_t<u8_t>(index), _line);
+    emit_single_byte(count, _line);
 }
 
 void set_correct_code_address(i16_t index, i32_t offset) {
@@ -1244,6 +1486,10 @@ TokenKind identifier_token() {
             else if (text_len == 4 && std::strncmp(text+1, "etd", 3) == 0)
                 kind = Get_D;
             break;
+        case 's':
+            if (text_len == 6 && std::strncmp(text+1, "tring", 5) == 0)
+                kind = String_Type;
+            break;
         default:
             break;
     }
@@ -1273,6 +1519,8 @@ TokenKind gettoken(bool save_line = true) {
         case ';': kind = Semicolon; break;
         case '{': kind = LeftBrace; break;
         case '}': kind = RightBrace; break;
+        case '[': kind = LeftSquare; break;
+        case ']': kind = RightSquare; break;
         case '"': return string_token(save_line);
         case ',': kind = Comma; break;
         case '%': kind = Modulus; break;
@@ -1313,7 +1561,7 @@ TokenKind gettoken(bool save_line = true) {
                 eat_c();
                 kind = LogicalAnd;
             } else {
-                kind = Error;
+                kind = Reference;
             }
             break;
         case '|':
@@ -1458,6 +1706,7 @@ i8_t unary_operator_precedence(TokenKind kind) {
         case False:
         case Nil:
         case LeftParen:
+        case LeftSquare:
         case Eof:
         case Semicolon:
         case Comma:
@@ -1491,6 +1740,7 @@ i8_t binary_operator_precedence(TokenKind kind) {
         case Eof:
         case RightParen:
         case RightBrace:
+        case RightSquare:
         case Semicolon:
         case Comma:
             return 0;
@@ -1521,10 +1771,28 @@ char escape_character(char d) {
     return '\0';
 }
 
-i16_t index_of(char const *text, i32_t length, bool &is_global) {
+i16_t index_of(char const *text, i32_t length, bool &is_global, bool &reference, u8_t &count, bool &is_string) {
     i32_t index;
     is_global = false;
-    if (locals.contains(text, length, index)) {
+    reference = false;
+    count = 1;
+    if (locals.contains(text, length, index, reference, count, is_string)) {
+        return index;
+    }
+
+    if (!globals2.contains({text, length}, index))
+        return -1;
+    
+    is_global = true;
+    return index;
+}
+
+i16_t index_of(char const *text, i32_t length, bool &is_global, bool &reference, u8_t &count) {
+    i32_t index;
+    is_global = false;
+    reference = false;
+    count = 1;
+    if (locals.contains(text, length, index, reference, count)) {
         return index;
     }
 
@@ -1539,7 +1807,9 @@ i16_t index_of(char const *text, i32_t length, bool &is_global) {
 void function_call() {
     i32_t address;
     i8_t arguments;
-    if (!functions.defined(text, text_len, address, arguments)) {
+    vector<i8_t> dummy;
+    vector<i8_t> &refs = dummy;
+    if (!functions.defined(text, text_len, address, arguments, refs)) {
         undefined_reference();
         TokenKind tok;
         while ((tok = peek_token()) != RightParen && tok != Eof)
@@ -1553,12 +1823,62 @@ void function_call() {
     auto func_name_len = text_len;
     auto save_line = line;
 
-    gettoken(); /* eat the '(' */
+    consume(LeftParen); /* eat the '(' */
     auto tok = peek_token();
     
     i8_t argument_count = 0;
     while (tok != RightParen && tok != Eof) {
+        if (refs.at(argument_count) == 1) {
+            if (tok != Reference) {
+                error_token("function expects reference to a variable as argument");
+                return;
+            }
+            consume(Reference);
+            if (peek_token() != Identifier) {
+                gettoken(false);
+                error_header(line);
+                std::fprintf(stderr, "expected identifier after '&', found ");
+                erroneous_token(text, text_len);
+                print_error_line(line - 1);
+                return;
+            }
+            consume(Identifier);
+            if (globals2.contains({text, text_len})) {
+                error_header(line);
+                std::fprintf(stderr, "reference to global variable is not supported yet: ");
+                erroneous_token(text, text_len);
+                print_error_line(line - 1);
+                return;
+            }
+
+            tok = peek_token();
+            if (tok != Comma && tok != RightParen) {
+                gettoken(false);
+                error_header(line);
+                std::fprintf(stderr, "expected ',' or ')', found ");
+                erroneous_token(text, text_len);
+                print_error_line(line - 1);
+                return;
+            }
+
+            bool is_global = false;
+            bool reference = false;
+            u8_t count;
+            auto index = index_of(text, text_len, is_global, reference, count);
+            if (index == -1) {
+                undefined_reference();
+                return; 
+            }
+
+            OpCode op = (is_global ? load_global_ref : load_local_ref);
+            index = (!is_global ? cur_local_index - index : index);
+            emit_three_bytes(op, index);
+            goto balance_label;
+            continue;
+        }
+
         parse_expression();
+balance_label:
         ++argument_count;
         tok = peek_token();
         if (tok == Comma) {
@@ -1622,13 +1942,43 @@ void parse_primary_expression() {
         case Identifier:
             {
                 bool is_global = false;
-                auto index = index_of(text, text_len, is_global);
+                bool reference = false;
+                u8_t count = 1;
+                bool is_string = false;
+                auto index = index_of(text, text_len, is_global, reference, count, is_string);
+          
                 if (index == -1) {
                     undefined_reference();
                     return;
                 }
 
+                if (is_string) {
+                    emit_array_indexing(get_string, index, count);
+                    return; 
+                }
+                
+                if (peek_token() != LeftSquare && count > 1) {
+                    undefined_reference();
+                    return;
+                }
+
+                if (peek_token() == LeftSquare && count <= 1) {
+                    undefined_reference();
+                    return;
+                }
+
                 OpCode op = (is_global) ? get_global : get_local;
+                if (reference && !is_global)
+                    op = get_local_ref;
+
+                if (count > 1 && peek_token() == LeftSquare) { 
+                    consume(LeftSquare);
+                    parse_assignment();
+                    consume(RightSquare);
+                    op = get_local_array;
+                    emit_array_indexing(get_local_array, index, count);
+                    break;
+                }
                 emit_three_bytes(op, index);
             }
             break;
@@ -1770,15 +2120,16 @@ void parse_assignment(i8_t parentPrecedence) {
     auto tok1 = peek_token();
     auto tok2 = peek_token(true, 1);
     if (tok1 == Identifier && tok2 == Equal) {
-        gettoken();
+        consume(Identifier);
         auto identifier = text;
         auto identifier_len = text_len;
         auto save_line = line;
-        gettoken();
-        parse_assignment(parentPrecedence);
-
+        consume(Equal);
         bool is_global = false;
-        auto index = index_of(identifier, identifier_len, is_global);
+        bool reference = false;
+        u8_t count;
+        bool is_string = false;
+        auto index = index_of(identifier, identifier_len, is_global, reference, count, is_string);
         if (index == -1) {
             undefined_reference(identifier, identifier_len, save_line);
             while ((tok1 = peek_token()) != Semicolon && tok1 != RightParen && tok1 != RightBrace && 
@@ -1788,8 +2139,95 @@ void parse_assignment(i8_t parentPrecedence) {
             return;
         }
 
+        if (is_string) {
+            auto save_line2 = line;
+            if (peek_token() != String) {
+                consume(Identifier);
+                
+                bool is_global2 = false;
+                u8_t count = 1;
+                bool reference = false;
+                bool is_string = false;
+                auto index = index_of(text, text_len, is_global, reference, count, is_string);
+                if (index == -1) {
+                    undefined_reference();
+                    return;
+                }
+                
+                if (!is_string) {
+                    compile_error = true;
+                    error_header(line);
+                    std::fprintf(stderr, "trying to assign incompatible type to a string: ");
+                    erroneous_token(text, text_len);
+                    print_error_line(line - 1);
+                    return;
+                }
+
+                emit_array_indexing(get_string, index, count);
+            } else {
+                consume(String);
+                emit_value(string_c, StringLiteral{text + 1, text_len - 2}, save_line);
+            }
+
+            if (text_len - 2 >= count) {
+                compile_error = true;
+                error_header(save_line2);
+                std::fprintf(stderr, "cannot assign a string bigger than allocated space: ");
+                erroneous_token(text, text_len);
+                print_error_line(save_line - 1);
+                std::fprintf(stderr, BOLD_PURBLE "NOTE" NORMAL ": target string expects a string of size [2, %u]\n", count);
+                return;
+            }
+            emit_array_indexing(set_string, index, count);
+            return;
+        } else {
+            parse_assignment(parentPrecedence);
+        }
+
         OpCode op = (is_global ? set_global : set_local);
+        if (reference && !is_global)
+            op = set_local_ref;
         emit_three_bytes(op, index, save_line);
+    } else if (tok1 == Identifier && tok2 == LeftSquare) {
+        i32_t cnt = 2;
+        while (tok2 != RightSquare) {
+            tok2 = peek_token(true, cnt++);
+
+            if (tok2 == RightSquare) {
+                if (peek_token(true, cnt) != Equal) {
+                    parse_expression(parentPrecedence);
+                    return;
+                }
+            }
+        }
+
+        consume(Identifier);
+        auto identifier = text;
+        auto identifier_len = text_len;
+        auto save_line = line;
+        consume(LeftSquare);
+        parse_assignment(parentPrecedence);
+        consume(RightSquare);
+        consume(Equal);
+        parse_assignment();
+
+        bool is_global = false;
+        bool reference = false;
+        u8_t count;
+        bool is_string = false;
+        auto index = index_of(identifier, identifier_len, is_global, reference, count, is_string);
+        if (index == -1) {
+            undefined_reference(identifier, identifier_len, save_line);
+            return;
+        }
+
+        if (is_string) {
+            emit_array_indexing(set_string_index, index, count);
+            return;
+        }
+        /* TODO: support global array */
+        OpCode op = set_local_array;
+        emit_array_indexing(op, index, count);
     } else {
         parse_expression(parentPrecedence);
     }
@@ -1910,8 +2348,17 @@ void start_new_scope() {
 }
 
 void end_new_scope() {
-    while (locals.variables.size() > 0 && locals.back().scope == cur_scope_depth) {
-        emit_single_byte(ipop);
+    while (locals.variables.size() > 0 && locals.back().scope == cur_scope_depth && cur_local_index > 0) {
+        auto count = locals.back().count;
+        if (count > 1) {
+            for (u8_t i = 0; i < count; ++i) {
+                emit_single_byte(ipop);
+                --cur_local_index;
+            }
+        } else {
+            emit_single_byte(ipop);
+            --cur_local_index;
+        }
         locals.pop();
     }
     --cur_scope_depth;
@@ -1920,7 +2367,7 @@ void end_new_scope() {
 void parse_declaration(TokenKind kind);
 
 void parse_block_statement() {
-    start_new_scope();
+    ++cur_scope_depth;
     gettoken(); /* eat '{' */
 
     auto tok = peek_token();
@@ -2000,7 +2447,7 @@ void parse_variable_declaration(bool consume_semicolon = true);
 
 /* inefficient for loop, takes more time to execute than while loop */
 void parse_for_statement() {
-    start_new_scope();
+    ++cur_scope_depth;
     gettoken();
     consume(LeftParen);
     
@@ -2052,7 +2499,7 @@ void parse_for_statement() {
 
 /* more efficient for loop */
 void parse_for_loop_effeciently() {
-    start_new_scope();
+    ++cur_scope_depth;
     gettoken();
     consume(LeftParen);
 
@@ -2123,7 +2570,7 @@ void parse_return_statement() {
     exit_addrs.push_back(code.size());
 }
 
-void parse_input_statement(OpCode op1, OpCode op2) {
+void parse_input_statement(OpCode op1, OpCode op2, OpCode op3, OpCode op4 = main_ret) {
     gettoken();
     consume(LeftParen);
     consume(Identifier);
@@ -2131,30 +2578,76 @@ void parse_input_statement(OpCode op1, OpCode op2) {
     auto ident_name = text;
     auto ident_len = text_len;
     auto save_line = line;
+
+    if (peek_token() == LeftSquare) {
+        consume(LeftSquare);
+        parse_assignment();
+        consume(RightSquare);
+    }
+
     consume(RightParen);
     consume(Semicolon);
 
     bool is_global = false;
-    i16_t index = index_of(ident_name, ident_len, is_global);
+    bool reference = false;
+    u8_t count;
+    i16_t index = index_of(ident_name, ident_len, is_global, reference, count);
     if (index == -1) {
         undefined_reference(ident_name, ident_len, save_line);
         return; 
     }
 
     op1 = (is_global ? op1 : op2);
+    if (reference && !is_global)
+        op1 = op3;
+
+    if (count > 1) {
+        op1 = op4;
+        emit_array_indexing(op4, index, count, save_line);
+        return;
+    }
     emit_three_bytes(op1, index, save_line);
 }
 
 void parse_get_c() {
-    parse_input_statement(get_c, local_get_c);
+    parse_input_statement(get_c, local_get_c, local_get_c_ref, local_array_get_c);
 }
 
 void parse_get_i() {
-    parse_input_statement(get_i, local_get_i);
+    parse_input_statement(get_i, local_get_i, local_get_i_ref, local_array_get_i);
 }
 
 void parse_get_d() {
-    parse_input_statement(get_d, local_get_d);
+    parse_input_statement(get_d, local_get_d, local_get_d_ref, local_array_get_d);
+}
+
+void parse_get_s() {
+    consume(Get_S);
+    consume(LeftParen);
+    consume(Identifier);
+
+    bool is_global;
+    u8_t count;
+    bool is_reference = false;
+    bool is_string = false;
+    auto index = index_of(text, text_len, is_global, is_reference, count, is_string);
+    if (index == -1) {
+        undefined_reference(text, text_len, line);
+        return; 
+    }
+
+    if (!is_string) {
+        compile_error = true;
+        error_header(line);
+        std::fprintf(stderr, "gets expects a string as argument: ");
+        erroneous_token(text, text_len);
+        print_error_line(line - 1);
+        return;
+    }
+    consume(RightParen);
+    consume(Semicolon);
+
+    emit_array_indexing(local_get_s, index, count);
 }
 
 void parse_statement(TokenKind kind) {
@@ -2174,6 +2667,8 @@ void parse_statement(TokenKind kind) {
         parse_get_i();
     } else if (kind == Get_D) {
         parse_get_d();
+    } else if (kind == Get_S) {
+        parse_get_s();
     } else if (kind == LeftBrace) {
         parse_block_statement();
     } else {
@@ -2181,7 +2676,7 @@ void parse_statement(TokenKind kind) {
     }
 }
 
-void define_variable(char const *identifier, i32_t identifier_len, i32_t _line) {
+void define_variable(char const *identifier, i32_t identifier_len, i32_t _line, u8_t count, i32_t index = -1) {
     if (cur_scope_depth == 0) {
         StringLiteral name = {identifier, identifier_len};
         if (globals2.contains(name)) {
@@ -2192,9 +2687,14 @@ void define_variable(char const *identifier, i32_t identifier_len, i32_t _line) 
         auto index = globals2.push(name, nullptr);
         emit_three_bytes(define_global, index, _line);
     } else {
-        i32_t index;
-        if (locals.contains(identifier, identifier_len, cur_scope_depth, index)) {
+        if (locals.contains(cur_scope_depth, identifier, identifier_len)) {
             redefining_variable(identifier, identifier_len, _line);
+            return;
+        }
+
+        locals.push(cur_scope_depth, identifier, identifier_len, count, index);
+        if (count > 1) {
+            emit_array_indexing(define_local_array, as_t<i16_t>(index), count, _line);
             return;
         }
         emit_three_bytes(define_local, as_t<i16_t>(index), _line);
@@ -2209,15 +2709,61 @@ void parse_variable_declaration(bool consume_semicolon) {
     auto identifier = text;
     auto identifier_len = text_len;
     auto save_line = line;
-    
+    bool is_array = false;
+    u8_t count = 1;
+
+    auto tok = peek_token();
+    auto index = cur_local_index++;
+    if (tok == LeftSquare) {
+        consume(LeftSquare);
+        consume(Integer);
+        count = to_i64(text, text_len);
+        cur_local_index = index + count;
+        is_array = true;
+        if (count < 2 || count >= UINT8_MAX) {
+            compile_error = true;
+            error_header(line);
+            std::fprintf(stderr, "array size can only be between [2, UINT8_MAX]\n");
+            print_error_line(line - 1);
+            return;
+        }
+        consume(RightSquare);
+    }
+
     if (peek_token() == Equal) {
         gettoken();
-        parse_assignment();
+        if (is_array) {
+            consume(LeftBrace);
+            i16_t i = 0;
+            for (; i < as_t<i16_t>(count); ++i) {
+                parse_assignment();
+                if (peek_token() == RightBrace) {
+                    ++i;
+                    break;
+                }
+                consume(Comma);
+            }
+
+            if (i != count) {
+                for ( ; i < as_t<i16_t>(count); ++i) {
+                    emit_single_byte(nil);
+                }
+            }
+            consume(RightBrace);
+        } else {
+            parse_assignment();
+        }
     } else {
-        emit_single_byte(nil);
+        if (is_array) {
+            for (i16_t i = 0; i < as_t<i16_t>(count); ++i) {
+                emit_single_byte(nil);
+            }
+        } else {
+            emit_single_byte(nil);
+        }
     }
     
-    define_variable(identifier, identifier_len, save_line);
+    define_variable(identifier, identifier_len, save_line, count, index);
     if (consume_semicolon)
         consume(Semicolon);
 }
@@ -2254,9 +2800,18 @@ void parse_function_declaration() {
 
     i8_t arguments = 0;
     auto tok = peek_token();
+    vector<i8_t> refs;
     while (tok != RightParen && tok != Eof) {
+        if (tok == Reference) {
+            consume(Reference);
+            refs.push_back(1);
+        } else if (tok == Identifier) {
+            refs.push_back(0);
+        }
         consume(Identifier);
         locals.push();
+        if (refs.back() == 1)
+            locals.back().reference = true;
         ++arguments;
         tok = peek_token();
         if (tok != RightParen) {
@@ -2271,6 +2826,8 @@ void parse_function_declaration() {
             auto &local = locals[arguments - 1 - i];
             local.index = -(2 + arguments - i);
         }
+
+        cur_local_index = 0;
     }
 
     if (peek_token() != LeftBrace) {
@@ -2289,7 +2846,7 @@ void parse_function_declaration() {
     }
 
     i32_t address = code.size();
-    functions.declare(func_name, func_name_len, address, arguments);
+    functions.declare(func_name, func_name_len, address, arguments, std::move(refs));
     emit_single_byte(ipush_bp);
     OpCode return_value = ret;
     if (func_name_len == 4 && std::strncmp(func_name, "main", 4) == 0) {
@@ -2302,9 +2859,6 @@ void parse_function_declaration() {
         tok = peek_token();
     }
     consume(RightBrace);
-    for (i8_t i = 0; i < arguments; ++i)
-        locals.pop();
-
     if (!exit_addrs.empty()) {
         for (auto &exit_function: exit_addrs)
             set_correct_code_address(code.size(), exit_function);
@@ -2315,14 +2869,81 @@ void parse_function_declaration() {
         emit_single_byte(store_ret_value);
     }
     end_new_scope();
+    for (i8_t i = 0; i < arguments; ++i)
+        locals.pop();
+
     emit_single_byte(ipop_bp);
     emit_single_byte(return_value); 
+}
+
+void define_string(char const *name, i32_t length, i32_t _line, i32_t index, u8_t count) {
+    /* TODO: add support for global strings */
+    if (locals.contains(cur_scope_depth, name, length)) {
+        redefining_variable(name, length, _line);
+        return;
+    }
+
+    locals.push(cur_scope_depth, name, length, count, index, true);
+    emit_array_indexing(define_local_array, as_t<i16_t>(index), count, _line); 
+}
+
+void parse_string_declaration() {
+    consume(String_Type);
+    consume(Identifier);
+    auto identifier = text;
+    auto identifier_len = text_len;
+    auto save_line = line;
+
+    consume(LeftSquare);
+    consume(Integer);
+    auto count = to_i64(text, text_len) + 1;
+
+    if (count < 2 || count >= UINT8_MAX) {
+        compile_error = true;
+        error_header(line);
+        std::fprintf(stderr, "string size can only be between [2, UINT8_MAX - 1]\n");
+        print_error_line(line - 1);
+        return;
+    }
+    
+    auto index = cur_local_index++;
+    cur_local_index = index + count;
+    consume(RightSquare);
+
+    if (peek_token() == Equal) {
+        consume(Equal);
+        consume(String);
+        if (text_len - 2 > count) {
+            error_header(line);
+            std::fprintf(stderr, "invalid size string: ");
+            erroneous_token(text, text_len);
+            print_error_line(line - 1);
+            return;
+        }
+
+        for (i32_t i = 1; i < text_len - 1; ++i) {
+            emit_value(char_c, text[i]);
+        }
+
+        for (i32_t i = 0; i < count - (text_len - 2); ++i) {
+            emit_value(char_c, '\0');
+        }
+    } else {
+        for (i32_t i = 0; i < count; ++i) {
+            emit_value(char_c, '\0');
+        }
+    }
+    
+    define_string(identifier, identifier_len, save_line, index, count);
+    consume(Semicolon);
 }
 
 void parse_declaration(TokenKind kind) {
     return_found = false;
     if (kind == Var) {
         parse_variable_declaration();
+    } else if (kind == String_Type) {
+        parse_string_declaration();
     } else {
         parse_statement(kind);
     }
@@ -2758,6 +3379,51 @@ bool run_vm() {
                     *(bp + index) = in;
                }
                break;
+            case local_get_s:
+               {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto count = *ip++;
+                    i32_t i = 0;
+                    char c;
+                    while (!std::isspace((c = std::getchar())) && i < count - 1) {
+                        *(bp + index + i) = c;
+                        ++i;
+                    }
+
+                    if (i < count) {
+                        while (i < count) {
+                            *(bp + index + i) = '\0';
+                            ++i;
+                        }
+                    }
+               }
+               break;
+            case local_get_c_ref:
+               {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    *(bp + index - (bp + index)->as_int()) = as_t<char>(std::getchar());
+               }
+               break;
+            case local_get_i_ref:
+               {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    i64_t in;
+                    std::scanf("%ld", &in);
+                    *(bp + index - (bp + index)->as_int()) = in;
+               }
+               break;
+            case local_get_d_ref:
+               {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    double in;
+                    std::scanf("%lF", &in);
+                    *(bp + index - (bp + index)->as_int()) = in;
+               }
+               break;
             case define_global:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
@@ -2769,7 +3435,13 @@ bool run_vm() {
                 {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
-                    *(bp + index) = peek();
+                }
+                break;
+            case define_local_array:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto count = *ip++;
                 }
                 break;
             case get_global:
@@ -2786,6 +3458,25 @@ bool run_vm() {
                     push(*(bp + index));
                 }
                 break;
+            case get_local_array:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    push(*(bp + index + array_index));
+                }
+                break;
             case set_global:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
@@ -2800,11 +3491,165 @@ bool run_vm() {
                     *(bp + index) = peek();
                 }
                 break;
+            case set_local_array:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek(1).is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = peek(1).as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    auto val = *(bp + index + array_index) = peek();
+                    pop();
+                    pop();
+                    push(val);
+                }
+                break;
+            case load_local_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    push(as_t<i64_t>(index));
+                }
+                break;
+            case get_local_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    push(*(bp - (bp + index)->as_int() + index));
+                }
+                break;
+            case set_local_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    *(bp + index - (bp + index)->as_int()) = peek();
+                }
+                break;
             case store_ret_value:
                 function_return_value = pop();
                 break;
             case load_ret_value:
                 push(function_return_value);
+                break;
+            case local_array_get_c:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    char val;
+                    *(bp + index + array_index) = val = as_t<char>(std::getchar());
+                }
+                break;
+            case local_array_get_i:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    i64_t val;
+                    std::scanf("%ld", &val);
+                    *(bp + index + array_index) = val;
+                }
+                break;
+            case local_array_get_d:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    double val;
+                    std::scanf("%lF", &val);
+                    *(bp + index + array_index) = val;
+                }
+                break;
+            case set_string:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    auto str = peek().as_string();
+                    auto size = std::min(str.length, as_t<i32_t>(count - 1));
+                    for (int32_t i = 0; i < size; ++i) {
+                        *(bp + index + i) = str.text[i];
+                    }
+
+                    while (size < count) {
+                        *(bp + index + size) = '\0';
+                        ++size;
+                    }
+                }
+                break;
+            case set_string_index:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_char()) {
+                        runtime_error("only <character> can be assigned to string", offset);
+                        return false;
+                    }
+
+                    if (!peek(1).is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+                    auto val = pop().as_char();
+                    auto string_index = pop().as_int();
+                    *(bp + index + string_index) = val;
+                    push(val);
+                }
+                break;
+            case get_string:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto count = *ip++;
+                    string str;
+                    for (i32_t i = 0; i < count - 1; ++i)
+                        str.push_back(as_t<char>((*(bp + index + i)).as_char()));
+                    str.push_back('\0');
+                    push(StringLiteral{str.c_str(), count});
+                }
                 break;
             case ret:
                 {
@@ -2842,6 +3687,7 @@ bool interpret() {
         std::fprintf(stderr, "main function starts at:\n");
         disassemble_instruction(main_addr);
     }
+    /*return true;*/
     return run_vm();
 }
 
@@ -2850,7 +3696,7 @@ bool interpret() {
 int main(int argc, char **argv) {
     if (argc > 1) {
         auto len = std::strlen(argv[1]);
-        if (len > 4 && argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
+        if (len >= 4 && argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
             read_file(argv[1]);
             save_all_lines();
 
