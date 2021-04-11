@@ -39,9 +39,11 @@ Very C like syntax, with some strict syntax rules.
         - || (expects boolean operands)
         - && (same as '||')
     - Unary Operators
-        - - (expects integer or double)
-        - + (same as unary '-')
-        - ! (defined for all type od data) 
+        - ++ (expects integer or double) (new)
+        - -- (same as prefix increment operator) (new)
+        - -  (same as prefix increment operator)
+        - +  (same as prefix increment operator)
+        - !  (defined for all type od data) 
 
 (``NOTE``: All binary operators expectes both operand to be of same type. Otherwise it is a
 runtime error)
