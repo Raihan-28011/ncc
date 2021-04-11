@@ -44,6 +44,7 @@ enum TokenKind {
     LessThan, LessEqual, GreaterThan,
     GreaterEqual, Equal, EqualEqual,
     LogicalAnd, LogicalOr,
+    PrefixInc, PrefixDec,
     Bang, NotEqual, Semicolon,
     Modulus,
     Comma,
@@ -74,6 +75,7 @@ constexpr char const *tokens[] = {
     "<", "<=", ">",
     ">=", "=", "==",
     "&&", "||",
+    "++", "--",
     "!", "!=", ";",
     "%",
     ",",
@@ -120,6 +122,12 @@ enum OpCode {
     neq,
     logical_and,
     logical_or,
+    pre_inc,
+    pre_dec,
+    pre_inc_local,
+    pre_dec_local,
+    pre_inc_local_array,
+    pre_dec_local_array,
     mod,
     jit,    /* jumpt if true */
     jif,    /* jump if false */
@@ -202,6 +210,12 @@ constexpr char const *instructions[] = {
     "neq",
     "logical_and",
     "logical_or",
+    "pre_inc",
+    "pre_dec",
+    "pre_inc_local",
+    "pre_dec_local",
+    "pre_inc_local_array",
+    "pre_dec_local_array",
     "mod",
     "jit",
     "jif",
@@ -676,8 +690,7 @@ vector<u32_t> argument_indexes(INT16_MAX, 0);
 Value function_return_value;
 vector<i32_t> exit_addrs;
 bool return_found = false;
-
-
+vector<i32_t> global_codes;
 
 
 
@@ -837,6 +850,32 @@ void disassemble_instruction(i32_t &offset) {
             break;
         case logical_or:
             single_byte_instruction(logical_or);
+            break;
+        case pre_inc:
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[pre_inc], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case pre_dec:
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[pre_dec], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case pre_inc_local:
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[pre_inc_local], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case pre_dec_local:
+            std::fprintf(stderr,"%20s\t%4d\n", instructions[pre_dec_local], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case pre_inc_local_array:
+            std::fprintf(stderr,"%20s\t%4d\t", instructions[pre_inc_local_array], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case pre_dec_local_array:
+            std::fprintf(stderr,"%20s\t%4d\t", instructions[pre_dec_local_array], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
         case mod:
             single_byte_instruction(mod);
@@ -1510,8 +1549,22 @@ TokenKind gettoken(bool save_line = true) {
     auto c = eat_c();
     TokenKind kind;
     switch (c) {
-        case '+': kind = Plus; break;
-        case '-': kind = Minus; break;
+        case '+': 
+            if (peek_c() == '+') {
+                eat_c();
+                kind = PrefixInc;
+            } else {
+                kind = Plus;
+            }
+            break;
+        case '-': 
+            if (peek_c() == '-') {
+                eat_c();
+                kind = PrefixDec;
+            } else {
+                kind = Minus;
+            }
+            break;
         case '*': kind = Star; break;
         case '/': kind = Slash; break;
         case '(': kind = LeftParen; break;
@@ -1692,6 +1745,9 @@ void synchronize() {
 
 i8_t unary_operator_precedence(TokenKind kind) {
     switch (kind) {
+        case PrefixInc:
+        case PrefixDec:
+            return 8;
         case Plus:
         case Minus:
         case Bang:
@@ -2008,8 +2064,73 @@ void parse_primary_expression() {
 void unary_expression(i8_t parentPrecedence) {
     gettoken();
     auto op = cur_token;
+
+    if (op._kind == PrefixInc || op._kind == PrefixDec) {
+        if (peek_token() != Identifier) {
+            gettoken();
+            unexpected_token("identifier", cur_token);
+            return;
+        }
+
+        consume(Identifier);
+        bool is_global = false;
+        bool reference = false;
+        u8_t count = 1;
+        bool is_string = false;
+        auto index = index_of(text, text_len, is_global, reference, count, is_string);
+
+        if (index == -1) {
+            undefined_reference();
+            return;
+        }
+
+        if (is_string) {
+            unexpected_token("variable of <integer> or <double> data type", cur_token);
+            return; 
+        }
+
+        if (peek_token() != LeftSquare && count > 1) {
+            undefined_reference();
+            return;
+        }
+
+        if (peek_token() == LeftSquare && count <= 1) {
+            undefined_reference();
+            return;
+        }
+
+        OpCode opcode;
+        
+        if (op._kind == PrefixInc) {
+            opcode = (is_global) ? pre_inc : pre_inc_local;
+
+            if (count > 1)
+                opcode = pre_inc_local_array;
+        } else if (op._kind == PrefixDec) {
+            opcode = (is_global) ? pre_dec : pre_dec_local;
+
+            if (count > 1)
+                opcode = pre_dec_local_array;
+        }
+        if (count > 1 && peek_token() == LeftSquare) { 
+            consume(LeftSquare);
+            parse_assignment();
+            consume(RightSquare);
+            emit_array_indexing(opcode, index, count);
+            return;
+        }
+        emit_three_bytes(opcode, index);
+        return;
+    }
+
     parse_expression(parentPrecedence);
     switch (op._kind) {
+        case PrefixInc:
+            emit_single_byte(pre_inc, op.line);
+            break;
+        case PrefixDec:
+            emit_single_byte(pre_dec, op.line);
+            break;
         case Plus:
             emit_single_byte(positive, op.line);
             break;
@@ -2685,6 +2806,7 @@ void define_variable(char const *identifier, i32_t identifier_len, i32_t _line, 
         }
 
         auto index = globals2.push(name, nullptr);
+        global_codes.push_back(code.size());
         emit_three_bytes(define_global, index, _line);
     } else {
         if (locals.contains(cur_scope_depth, identifier, identifier_len)) {
@@ -2958,6 +3080,7 @@ void parse_functions(TokenKind kind) {
     if (kind == Func) {
         parse_function_declaration();
     } else {
+        global_codes.push_back(code.size());
         parse_declaration(kind);
     }
 }
@@ -3106,37 +3229,50 @@ bool run_vm() {
     val2 = pop();\
     val1 = pop();\
     if (val1.is_int())\
-        push(val1.as_int() op val2.as_int());\
+    push(val1.as_int() op val2.as_int());\
     else if (val1.is_double())\
-        push(val1.as_double() op val2.as_double());
+    push(val1.as_double() op val2.as_double());
 
 #define relational_operation(op) \
     val2 = pop();\
     val1 = pop();\
     if (val1.is_int())\
-        push(val1.as_int() op val2.as_int());\
+    push(val1.as_int() op val2.as_int());\
     else if (val1.is_char())\
-        push(val1.as_char() op val2.as_char());
+    push(val1.as_char() op val2.as_char());
 
 #define equality_operation(op) \
-   if (peek()._kind != peek(1)._kind) {\
+    if (peek()._kind != peek(1)._kind) {\
         runtime_error("operands have to be of same type", offset);\
         return false;\
-   }\
-   val2 = pop();\
-   val1 = pop();\
-   if (val1.is_int())\
-       push(val1.as_int() op val2.as_int());\
-   else if (val1.is_char())\
-       push(val2.as_char() op val1.as_char());\
-   else if (val1.is_double())\
-       push(std::fabs(val1.as_double() - val2.as_double()) op 0.0);\
-   else if (val1.is_bool())\
-        push(val1.as_bool() op val2.as_bool());
+    }\
+    val2 = pop();\
+    val1 = pop();\
+    if (val1.is_int())\
+    push(val1.as_int() op val2.as_int());\
+    else if (val1.is_char())\
+    push(val2.as_char() op val1.as_char());\
+    else if (val1.is_double())\
+    push(std::fabs(val1.as_double() - val2.as_double()) op 0.0);\
+    else if (val1.is_bool())\
+    push(val1.as_bool() op val2.as_bool());
 
+    
+    bool has_globals = false;
+    i32_t i = 0;
+global_execution:
+    for ( ; i < i32_t(global_codes.size()); ) {
+        ip = vector<u8_t>::iterator(code.begin() + global_codes.at(i));
+        has_globals = true;
+        ++i;
+        goto runtime_start;
+    }
 
+    has_globals = false;
+    ip = code.begin() + main_addr;
 
     while (true) {
+runtime_start:
         auto offset = as_t<i32_t>(ip - code.begin());
         if (show_opcodes) {
             std::fprintf(stderr, "\t\t\t\t\t\t\t\tstack = [ ");
@@ -3147,11 +3283,10 @@ bool run_vm() {
             std::fprintf(stderr, "]\n");
             disassemble_instruction(offset);
         }
-        
+
         auto instruction = as_t<OpCode>(*ip++);
         Value val1;
         Value val2;
-        /*string str;*/
         char temp[1000];
         i32_t temp_length = 0;
         switch (instruction) {
@@ -3220,47 +3355,177 @@ bool run_vm() {
                 relational_operation(<)
                 else if (val1.is_double())
                     push(std::isless(val1.as_double(), val2.as_double()));
-               break; 
+                break; 
             case lte:
-               relational_type_check();
+                relational_type_check();
 
-               relational_operation(<=)
-               else if (val1.is_double())
-                   push(std::islessequal(val1.as_double(), val2.as_double()));
-               break;
+                relational_operation(<=)
+                else if (val1.is_double())
+                    push(std::islessequal(val1.as_double(), val2.as_double()));
+                break;
             case gt:
-               relational_type_check();
+                relational_type_check();
 
-               relational_operation(>)
-               else if (val1.is_double())
-                   push(std::isgreater(val1.as_double(), val2.as_double()));
-               break;
+                relational_operation(>)
+                else if (val1.is_double())
+                    push(std::isgreater(val1.as_double(), val2.as_double()));
+                break;
             case gte:
-               relational_type_check();
+                relational_type_check();
 
-               relational_operation(>=)
-               else if (val1.is_double())
-                   push(std::isgreaterequal(val1.as_double(), val2.as_double()));
-               break;
+                relational_operation(>=)
+                else if (val1.is_double())
+                    push(std::isgreaterequal(val1.as_double(), val2.as_double()));
+                break;
             case eq:
-               equality_operation(==);
-               break;
+                equality_operation(==);
+                break;
             case inot:
-               push(!pop().as_bool());
-               break;
+                push(!pop().as_bool());
+                break;
             case neq:
-               equality_operation(!=);
-               break;
+                equality_operation(!=);
+                break;
             case logical_and:
-               val2 = pop();
-               val1 = pop();
-               push(val1.as_bool() && val2.as_bool());
-               break;
+                val2 = pop();
+                val1 = pop();
+                push(val1.as_bool() && val2.as_bool());
+                break;
             case logical_or:
-               val2 = pop();
-               val1 = pop();
-               push(val1.as_bool() || val2.as_bool());
-               break;
+                val2 = pop();
+                val1 = pop();
+                push(val1.as_bool() || val2.as_bool());
+                break;
+            case pre_inc:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto &val = globals2[index];
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'++' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() + 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() + 1.0;
+                    }
+                    push(val);
+                }
+                break;
+            case pre_dec:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto &val = globals2[index];
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'--' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() - 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() - 1.0;
+                    }
+                    push(val);
+                }
+                break;
+            case pre_inc_local:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto &val = *(bp + index);
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'++' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() + 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() + 1.0;
+                    }
+                    push(val);
+                }
+                break;
+            case pre_dec_local:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    auto &val = *(bp + index);
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'--' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() - 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() - 1.0;
+                    }
+                    push(val);
+                }
+                break;
+            case pre_inc_local_array:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+                    auto &val = *(bp + index + array_index);
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'--' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() + 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() + 1.0;
+                    }
+                    push(val);
+                }
+                break;
+            case pre_dec_local_array:
+                { 
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+                    auto &val = *(bp + index + array_index);
+                    if (!val.is_int() && !val.is_double()) {
+                        runtime_error("'--' operator expectd operand of type <integer> or <double>", offset);
+                        return false;
+                    }
+
+                    if (val.is_int()) {
+                        val = val.as_int() - 1;
+                    } else if (val.is_double()) {
+                        val = val.as_double() - 1.0;
+                    }
+                    push(val);
+                }
+                break;
             case mod:
                 arithmatic_type_check();
 
@@ -3272,120 +3537,120 @@ bool run_vm() {
                     push(std::fmod(val1.as_double(), val2.as_double()));
                 break;
             case jit:
-               {
-                   val1 = peek();
-                   if (val1.as_bool()) {
+                {
+                    val1 = peek();
+                    if (val1.as_bool()) {
                         auto index = get_double_byte_index(ip - code.begin());
                         ip = code.begin() + index;
-                   } else {
+                    } else {
                         ip += 2;
-                   }
-               }
-               break;
+                    }
+                }
+                break;
             case jif:
-               {
-                   val1 = peek();
-                   if (!val1.as_bool()) {
+                {
+                    val1 = peek();
+                    if (!val1.as_bool()) {
                         auto index = get_double_byte_index(ip - code.begin());
                         ip = code.begin() + index;
-                   } else {
+                    } else {
                         ip += 2;
-                   }
-               }
-               break;
+                    }
+                }
+                break;
             case jump:
-               {
+                {
                     ip = code.begin() + get_double_byte_index(ip - code.begin());
-               }
-               break;
+                }
+                break;
             case ipop:
-               pop();
-               break;
+                pop();
+                break;
             case ipush_bp:
-               push(bp - stack.begin());
-               bp = sp;
-               break;
+                push(bp - stack.begin());
+                bp = sp;
+                break;
             case ipop_bp:
-               {
-                   auto index = (*(sp - 1)).as_int();
-                   bp = stack.begin() + index;
-                   --sp;
-               }
-               break;
+                {
+                    auto index = (*(sp - 1)).as_int();
+                    bp = stack.begin() + index;
+                    --sp;
+                }
+                break;
             case ret_addr:
-               {
+                {
                     auto addr = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     push(as_t<i64_t>(addr));
-               }
-               break;
+                }
+                break;
             case push_arg_addr:
-               push(as_t<i64_t>(argument_indexes.at(get_double_byte_index(ip - code.begin()))));
-               ip += 2;
-               break;
+                push(as_t<i64_t>(argument_indexes.at(get_double_byte_index(ip - code.begin()))));
+                ip += 2;
+                break;
             case pop_arg_addr:
-               argument_indexes.at(get_double_byte_index(ip - code.begin())) = pop().as_int();
-               ip += 2;
-               break;
+                argument_indexes.at(get_double_byte_index(ip - code.begin())) = pop().as_int();
+                ip += 2;
+                break;
             case set_arg_addr:
                 argument_indexes.at(get_double_byte_index(ip - code.begin())) = sp - stack.begin();
                 ip += 2;
                 break;             
             case print:
-               print_function();
-               break;
+                print_function();
+                break;
             case get_c:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     globals2[index] = as_t<char>(std::getchar());
-               }
-               break;
+                }
+                break;
             case get_i:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
                     std::scanf("%ld", &in);
                     globals2[index] = in;
-               }
-               break;
+                }
+                break;
             case get_d:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
                     std::scanf("%lF", &in);
                     globals2[index] = in;
-               }
-               break;
+                }
+                break;
             case local_get_c:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     *(bp + index) = as_t<char>(std::getchar());
-               }
-               break;
+                }
+                break;
             case local_get_i:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
                     std::scanf("%ld", &in);
                     *(bp + index) = in;
-               }
-               break;
+                }
+                break;
             case local_get_d:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
                     std::scanf("%lF", &in);
                     *(bp + index) = in;
-               }
-               break;
+                }
+                break;
             case local_get_s:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     auto count = *ip++;
@@ -3402,33 +3667,33 @@ bool run_vm() {
                             ++i;
                         }
                     }
-               }
-               break;
+                }
+                break;
             case local_get_c_ref:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     *(bp + index - (bp + index)->as_int()) = as_t<char>(std::getchar());
-               }
-               break;
+                }
+                break;
             case local_get_i_ref:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
                     std::scanf("%ld", &in);
                     *(bp + index - (bp + index)->as_int()) = in;
-               }
-               break;
+                }
+                break;
             case local_get_d_ref:
-               {
+                {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
                     std::scanf("%lF", &in);
                     *(bp + index - (bp + index)->as_int()) = in;
-               }
-               break;
+                }
+                break;
             case define_global:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
@@ -3649,14 +3914,11 @@ bool run_vm() {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     auto count = *ip++;
-                    /*str.clear();*/
                     temp_length = 0;
                     for (i32_t i = 0; i < count - 1; ++i) {
-                        /*str.push_back(as_t<char>((*(bp + index + i)).as_char()));*/
                         temp[i] = as_t<char>((*(bp + index + i)).as_char());
                         ++temp_length;
                     }
-                    /*str.push_back('\0');*/
                     temp[temp_length] = '\0';
                     push(StringLiteral{temp, temp_length});
                 }
@@ -3672,6 +3934,11 @@ bool run_vm() {
             default:
                 return true;
         }
+
+        if (has_globals) {
+            goto global_execution;
+        }
+
     }
 
     return true;
