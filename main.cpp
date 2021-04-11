@@ -1291,7 +1291,7 @@ TokenKind number_token() {
 }
 
 bool is_escape_char(char c) {
-    return !(c != 'a' && c != 'b' && c != 'n' && c != 'r' && c != 't' && c != '\\' && c != '\'' && c != '"');
+    return !(c != 'a' && c != 'b' && c != 'n' && c != 'r' && c != 't' && c != '\\' && c != '\'' && c != '"' && c != '0');
 }
 
 TokenKind char_token(bool print_error = true) {
@@ -2913,7 +2913,7 @@ void parse_string_declaration() {
     if (peek_token() == Equal) {
         consume(Equal);
         consume(String);
-        if (text_len - 2 > count) {
+        if (text_len - 2 >= count) {
             error_header(line);
             std::fprintf(stderr, "invalid size string: ");
             erroneous_token(text, text_len);
@@ -2921,12 +2921,14 @@ void parse_string_declaration() {
             return;
         }
 
-        for (i32_t i = 1; i < text_len - 1; ++i) {
-            emit_value(char_c, text[i]);
+        i32_t i = 0;
+        for ( ; i < text_len - 2; ++i) {
+            emit_value(char_c, text[i + 1]);
         }
 
-        for (i32_t i = 0; i < count - (text_len - 2); ++i) {
+        while (i < count) {
             emit_value(char_c, '\0');
+            ++i;
         }
     } else {
         for (i32_t i = 0; i < count; ++i) {
@@ -3149,6 +3151,9 @@ bool run_vm() {
         auto instruction = as_t<OpCode>(*ip++);
         Value val1;
         Value val2;
+        /*string str;*/
+        char temp[1000];
+        i32_t temp_length = 0;
         switch (instruction) {
             case int_c:
                 push(values.at(get_double_byte_index(ip - code.begin())).as_int());
@@ -3386,7 +3391,7 @@ bool run_vm() {
                     auto count = *ip++;
                     i32_t i = 0;
                     char c;
-                    while (!std::isspace((c = std::getchar())) && i < count - 1) {
+                    while (!std::isspace((c = std::getchar())) && c != std::char_traits<char>::eof() && i < count - 1) {
                         *(bp + index + i) = c;
                         ++i;
                     }
@@ -3644,11 +3649,16 @@ bool run_vm() {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     auto count = *ip++;
-                    string str;
-                    for (i32_t i = 0; i < count - 1; ++i)
-                        str.push_back(as_t<char>((*(bp + index + i)).as_char()));
-                    str.push_back('\0');
-                    push(StringLiteral{str.c_str(), count});
+                    /*str.clear();*/
+                    temp_length = 0;
+                    for (i32_t i = 0; i < count - 1; ++i) {
+                        /*str.push_back(as_t<char>((*(bp + index + i)).as_char()));*/
+                        temp[i] = as_t<char>((*(bp + index + i)).as_char());
+                        ++temp_length;
+                    }
+                    /*str.push_back('\0');*/
+                    temp[temp_length] = '\0';
+                    push(StringLiteral{temp, temp_length});
                 }
                 break;
             case ret:
