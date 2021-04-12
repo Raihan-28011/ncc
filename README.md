@@ -11,6 +11,10 @@ Date: 12.04.2021
 - Removed all scanfs, so that msvc doesn't give any warnings
 
 ## New Features
+Date: 13.04.2021
+- Support for arrays as function arguments
+
+Date: 12.04.2021
 - Support for prefix increment operator and prefix decrement operator
 - New ``string`` type
 - Support for string inputs
@@ -148,7 +152,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
 
     print("demo: {demo}\tdemo2: {demo2}\n"); // output: `demo: NoobC    demo2: NoobC has Strings Now`
 
-    demo[1] = 'M';  // strings are indexable
+    demo[0] = 'M';  // strings are indexable
     print("demo: {demo}\n"); // output: `demo: MoobC`
 ```
 (``NOTE``: As like array, ``strings`` can also be of size 2 to 255. Only local scope strings are supported fow now)
@@ -186,8 +190,9 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
 ```
 (``NOTE``: Only local scope strings are supported for now)
 
-## Refenrences (new)
+## Refenrence (new)
 
+### Reference to local variables
 ```go
     func get_integer_with_ref(&n) {     // to indicate that the argument is a reference, & is prefixed to the argument name
         print("Enter a number: ");
@@ -209,6 +214,36 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
     }
 
 ```
+### Reference to local arrays (new)
+Now functions support, arrays as arguments. But, they are only reference. Because, arrays in NoobC, are not copyable or assignable.
+And also, it is memory efficient and also removes the complexity of copying datas into new array.
+```go
+
+    func get_integers(&array[10]) {     // arrays can be passed to a function, but as a reference
+                                        // and the size of the array has to be known at compile time (for now)
+        for (var i = 0; i < 10; ++i) {
+            var n;
+            geti(n);
+            array[i] = n;
+        }
+    }
+
+    func print_array(array[10]) {   // this is an error, array arguments must have to be reference
+        for (var i = 0; i < 10; ++i) {
+            print("array[{i}]: {array[i]}\n");
+        }
+    }
+
+    func main() {
+        var array[10];
+        get_integers(&array);   // to pass an array, & has to be prefixed
+        get_integers(array);    // this will be an error
+        print_array(&array);
+    }
+
+```
+(``NOTE``: global arrays are still not supported)
+
 
 (``NOTE``: Functions cannot take arrays as argument yet. Only local variables support reference.
 Global variable reference is not yet supported)

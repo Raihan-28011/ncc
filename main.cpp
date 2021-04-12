@@ -5,6 +5,8 @@
 #else
 #include <windows.h>
 
+// I copied below code from the internet, because I know nothing about windows api
+// Below is two functions, to set the windows console, interpret ansi escape sequneces correctly
 #ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
 #define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
 #endif
@@ -37,9 +39,7 @@ void resetConsole(void) {
         std::exit(GetLastError());
     }
 }
-
 #endif
-
 
 #include <cstddef>
 #include <cstdio>
@@ -224,6 +224,14 @@ enum OpCode {
     set_string_index,
     get_string,
 
+    load_arg_array_ref,
+    get_arg_array_ref,
+    set_arg_array_ref,
+    geti_arg_array_ref,
+    getc_arg_array_ref,
+    getd_arg_array_ref,
+
+
     store_ret_value,
     load_ret_value,
     ret,
@@ -309,6 +317,13 @@ constexpr char const *instructions[] = {
     "set_string",
     "set_string_index",
     "get_string",
+
+    "load_arg_array_ref",
+    "get_arg_array_ref",
+    "set_arg_array_ref",
+    "geti_arg_array_ref",
+    "getc_arg_array_ref",
+    "getd_arg_array_ref",
 
     "store_ret_value",
     "load_ret_value",
@@ -1134,6 +1149,20 @@ void disassemble_instruction(i32_t &offset) {
             break;
         case get_string:
             std::fprintf(stderr, "%20s\t%4d\t", instructions[get_string], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case load_arg_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[load_arg_array_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
+        case get_arg_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[get_arg_array_ref], get_double_byte_index(++offset));
+            offset += 1;
+            std::fprintf(stderr, "%4u\n", code.at(++offset));
+            break;
+        case set_arg_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_arg_array_ref], get_double_byte_index(++offset));
             offset += 1;
             std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
@@ -2010,7 +2039,7 @@ void function_call() {
     
     i8_t argument_count = 0;
     while (tok != RightParen && tok != Eof) {
-        if (refs.at(argument_count) == 1) {
+        if (refs.at(argument_count) > 0) {
             if (tok != Reference) {
                 error_token("function expects reference to a variable as argument");
                 return;
@@ -2054,6 +2083,26 @@ void function_call() {
 
             OpCode op = (is_global ? load_global_ref : load_local_ref);
             index = (!is_global ? cur_local_index - index : index);
+            if (refs.at(argument_count) > 1) {
+                if (count <= 1) {
+                    error_header(line);
+                    std::fprintf(stderr, "expected reference to an array");
+                    erroneous_token(text, text_len);
+                    print_error_line(line - 1);
+                    return;
+                }
+
+                if (count != refs.at(argument_count)) {
+                    error_header(line);
+                    std::fprintf(stderr, "invalid argument");
+                    erroneous_token(text, text_len);
+                    print_error_line(line - 1);
+                    std::fprintf(stderr, BOLD_PURBLE "NOTE" NORMAL ": function expects argument to be an array of size %u\n\n", refs.at(argument_count));
+                    return;
+                }
+
+                op = load_arg_array_ref;
+            }
             emit_three_bytes(op, index);
             goto balance_label;
             continue;
@@ -2158,7 +2207,11 @@ void parse_primary_expression() {
                     parse_assignment();
                     consume(RightSquare);
                     op = get_local_array;
-                    emit_array_indexing(get_local_array, index, count);
+
+                    if (reference)
+                        op = get_arg_array_ref;
+
+                    emit_array_indexing(op, index, count);
                     break;
                 }
                 emit_three_bytes(op, index);
@@ -2473,7 +2526,7 @@ void parse_assignment(i8_t parentPrecedence) {
             return;
         }
         /* TODO: support global array */
-        OpCode op = set_local_array;
+        OpCode op = (!reference ? set_local_array : set_arg_array_ref);
         emit_array_indexing(op, index, count);
     } else {
         parse_expression(parentPrecedence);
@@ -3057,8 +3110,28 @@ void parse_function_declaration() {
             refs.push_back(0);
         }
         consume(Identifier);
-        locals.push();
-        if (refs.back() == 1)
+        auto identifier = text;
+        auto identifier_len = text_len;
+        auto save_line = line;
+        u8_t count = 1;
+        if (peek_token() == LeftSquare) {
+            if (refs.back() != 1) {
+                compile_error = true;
+                error_header(save_line);
+                std::fprintf(stderr, "arguments that are array, have to be a reference: ");
+                erroneous_token(identifier, identifier_len);
+                print_error_line(save_line - 1);
+                gettoken(false);
+                return;
+            }
+            consume(LeftSquare);
+            consume(Integer);
+            count = to_i64(text, text_len);
+            refs.back() = count;
+            consume(RightSquare);
+        }
+        locals.push(cur_scope_depth, identifier, identifier_len, count, cur_local_index++);
+        if (refs.back() > 1)
             locals.back().reference = true;
         ++arguments;
         tok = peek_token();
@@ -4032,6 +4105,9 @@ runtime_start:
                     ip += 2;
                     u8_t count = *ip++;
                     auto str = peek().as_string();
+                    #ifdef min // in wndows api, there is a min macro defined, so I undefied it to surpass errors
+                    #undef min
+                    #endif
                     auto size = std::min(str.length, as_t<i32_t>(count - 1));
                     for (int32_t i = 0; i < size; ++i) {
                         *(bp + index + i) = str.text[i];
@@ -4075,6 +4151,53 @@ runtime_start:
                     }
                     temp[temp_length] = '\0';
                     push(StringLiteral{temp, temp_length});
+                }
+                break;
+            case load_arg_array_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    push(as_t<i64_t>(index));
+                }
+                break;
+            case get_arg_array_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek().is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = pop().as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+                    push(*(bp + index - (*(bp + index)).as_int() + array_index));
+                }
+                break;
+            case set_arg_array_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    u8_t count = *ip++;
+                    if (!peek(1).is_int()) {
+                        runtime_error("index of array have to be of type <integer>", offset);
+                        return false;
+                    }
+
+                    auto array_index = peek(1).as_int();
+                    if (array_index >= count) {
+                        runtime_error("out of range index", offset);
+                        return false;
+                    }
+
+                    auto val = pop();
+                    *(bp + index - (*(bp + index)).as_int() + array_index) = val;
+                    pop();
+                    push(val);
                 }
                 break;
             case ret:
