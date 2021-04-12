@@ -1,3 +1,42 @@
+#include <cstdlib>
+
+#ifdef __linux
+    // do nothing
+#else
+#include <windows.h>
+
+static HANDLE stdoutHandle;
+static DWORD stdoutModeCurrent;
+
+void setupConsole(void) {
+    DWORD outMode = 0;
+    stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (stdoutHandle == INVALID_HANDLE_VALUE) {
+        std::exit(GetLastError());
+    }
+
+    if (!GetConsoleMode(stdoutHandle, &outMode)) {
+        std::exit(GetLastError());
+    }
+
+    stdoutModeCurrent = outMode;
+    outMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+
+    if (!SetConsoleMode(stdoutHandle, outMode)) {
+        std::exit(GetLastError());
+    }
+}
+
+void resetConsole(void) {
+    if (!SetConsoleMode(stdoutHandle, stdoutModeCurrent)) {
+        std::exit(GetLastError());
+    }
+}
+
+#endif
+
+
 #include <cstddef>
 #include <cstdio>
 #include <iostream>
@@ -711,8 +750,25 @@ inline T *as_ptr(N *as) {
     return static_cast<T*>(as);
 }
 
-void read_file(char const *argv) {
+#ifdef __linux
+#define BOLD_RED "\x1b[1;31m"
+#define BOLD_GREEN "\x1b[1;32m"
+#define BOLD_PURBLE "\x1b[1;35m"
+#define NORMAL "\x1b[m"
+#else
+#define BOLD_RED "\033[1m\033[31m"
+#define BOLD_GREEN "\033[1m\033[32m"
+#define BOLD_PURBLE "\033[1m\033[35m"
+#define NORMAL "\033[0m"
+#endif
+
+bool read_file(char const *argv) {
     std::ifstream file(argv, std::ios::in | std::ios::binary);
+    if (!file.is_open()) {
+        std::fprintf(stderr, "ncc:" BOLD_RED " error" NORMAL ": no such file or directory\n");
+        return false;
+    }
+
     file.seekg(0, std::ios::end);
 
     auto fsize = as_t<long long>(file.tellg());
@@ -726,6 +782,7 @@ void read_file(char const *argv) {
         source[--fsize] = '\0';
     source_length = fsize;
     cur_line = source;
+    return true;
 }
 
 void save_all_lines() {
@@ -1166,12 +1223,72 @@ Fraction to_double(char const *text, i32_t length) {
     return {ret, fraction_count};
 }
 
-#ifdef __linux
-#define BOLD_RED "\x1b[1;31m"
-#define BOLD_GREEN "\x1b[1;32m"
-#define BOLD_PURBLE "\x1b[1;35m"
-#define NORMAL "\x1b[m"
-#endif
+bool get_integer(i64_t &n) {
+    n = 0;
+    char c = std::getchar();
+    bool is_positive = (c == '+' ? true : false);
+    bool is_negative = (c == '-' ? true : false);
+
+    if (!is_negative && !is_positive && !std::isdigit(c)) {
+        return false;
+    } else if (!is_negative && !is_positive) {
+        std::ungetc(c, stdin);
+    }
+
+    while (std::isdigit((c = std::getchar())) && c != std::char_traits<char>::eof()) {
+        n = n * 10 + (c - '0');
+    }
+
+    if (!std::isspace(c))
+        std::ungetc(c, stdin);
+    
+    n = (is_negative ? -n : n);
+    return true;
+}
+
+bool get_double(double &n) {
+    n = 0;
+    i8_t fraction_count = 0;
+    char c = std::getchar();
+    bool is_positive = (c == '+' ? true : false);
+    bool is_negative = (c == '-' ? true : false);
+
+    if (!is_negative && !is_positive && !std::isdigit(c)) {
+        return false;
+    } else if (!is_negative && !is_positive) {
+        std::ungetc(c, stdin);
+    }
+
+    bool has_radix_point = false;
+    while ((std::isdigit((c = std::getchar())) || c == '.') && c != std::char_traits<char>::eof()) {
+        if (c == '.' && has_radix_point) {
+            return false;
+        }
+
+        if (c == '.' && !has_radix_point) {
+            has_radix_point = true;
+            continue;
+        }
+
+        if (fraction_count >= 10)
+            continue;
+
+        if (has_radix_point)
+            ++fraction_count;
+
+        n = n * 10 + (c - '0');
+    }
+
+    if (!std::isspace(c))
+        std::ungetc(c, stdin);
+
+    while (fraction_count--)
+        n /= 10;
+
+    n = (is_negative ? -n : n);
+
+    return true;
+}
 
 void print_error_line(int offset, char const *_text = text) {
     auto &error_line = sourcecode.at(offset);
@@ -3567,7 +3684,7 @@ runtime_start:
                 pop();
                 break;
             case ipush_bp:
-                push(bp - stack.begin());
+                push(as_t<i64_t>(bp - stack.begin()));
                 bp = sp;
                 break;
             case ipop_bp:
@@ -3611,7 +3728,12 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
-                    std::scanf("%ld", &in);
+                    
+                    if (!get_integer(in)) {
+                        runtime_error("invalid integer input", offset);
+                        return false; 
+                    }
+
                     globals2[index] = in;
                 }
                 break;
@@ -3620,7 +3742,12 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
-                    std::scanf("%lF", &in);
+
+                    if (!get_double(in)) {
+                        runtime_error("invalid number input", offset);
+                        return false;
+                    }
+
                     globals2[index] = in;
                 }
                 break;
@@ -3636,7 +3763,10 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
-                    std::scanf("%ld", &in);
+                    if (!get_integer(in)) {
+                        runtime_error("invalid integer input", offset);
+                        return false; 
+                    }
                     *(bp + index) = in;
                 }
                 break;
@@ -3645,7 +3775,10 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
-                    std::scanf("%lF", &in);
+                    if (!get_double(in)) {
+                        runtime_error("invalid number input", offset);
+                        return false;
+                    }
                     *(bp + index) = in;
                 }
                 break;
@@ -3681,7 +3814,10 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     i64_t in;
-                    std::scanf("%ld", &in);
+                    if (!get_integer(in)) {
+                        runtime_error("invalid integer input", offset);
+                        return false; 
+                    }
                     *(bp + index - (bp + index)->as_int()) = in;
                 }
                 break;
@@ -3690,7 +3826,10 @@ runtime_start:
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
                     double in;
-                    std::scanf("%lF", &in);
+                    if (!get_double(in)) {
+                        runtime_error("invalid number input", offset);
+                        return false;
+                    }
                     *(bp + index - (bp + index)->as_int()) = in;
                 }
                 break;
@@ -3847,7 +3986,10 @@ runtime_start:
                     }
 
                     i64_t val;
-                    std::scanf("%ld", &val);
+                    if (!get_integer(val)) {
+                        runtime_error("invalid integer input", offset);
+                        return false; 
+                    }
                     *(bp + index + array_index) = val;
                 }
                 break;
@@ -3868,7 +4010,10 @@ runtime_start:
                     }
 
                     double val;
-                    std::scanf("%lF", &val);
+                    if (!get_double(val)) {
+                        runtime_error("invalid number input", offset);
+                        return false;
+                    }
                     *(bp + index + array_index) = val;
                 }
                 break;
@@ -3955,7 +4100,7 @@ bool interpret() {
    
 
     if (main_addr == -1) {
-        std::fprintf(stderr, "could not find main function\n");
+        std::fprintf(stderr, "ncc:" BOLD_RED "error" NORMAL ": could not find main function\n");
         return false;
     }
 
@@ -3971,10 +4116,18 @@ bool interpret() {
 /* runtime end */
 
 int main(int argc, char **argv) {
+#ifdef __linux
+    // do nothing
+#else
+    setupConsole();
+#endif
+
     if (argc > 1) {
         auto len = std::strlen(argv[1]);
         if (len >= 4 && argv[1][len-1] == 'c' && argv[1][len-2] == 'n' && argv[1][len-3] == '.') {
-            read_file(argv[1]);
+            if (!read_file(argv[1])) {
+                return EXIT_FAILURE;
+            }
             save_all_lines();
 
             if (argc > 2) {
@@ -3983,18 +4136,40 @@ int main(int argc, char **argv) {
             }
         } else {
             std::fprintf(stderr, "ncc: " BOLD_RED "error" NORMAL ": unknown file format. Only files with extension 'nc' are supported\n");
+
+#ifdef __linux
+            // do nothing
+#else
+            resetConsole();
+#endif
+
             return EXIT_FAILURE;
         }
     } else {
         std::fprintf(stderr, "usage: ncc FILE\n");
+#ifdef __linux
+            // do nothing
+#else
+            resetConsole();
+#endif
         return EXIT_FAILURE;
     }
 
     if (interpret()) {
         delete[] source;
+#ifdef __linux
+            // do nothing
+#else
+            resetConsole();
+#endif
         return EXIT_SUCCESS;
     }
 
     delete[] source;
+#ifdef __linux
+            // do nothing
+#else
+            resetConsole();
+#endif
 	return EXIT_FAILURE;
 }
