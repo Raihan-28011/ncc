@@ -5,6 +5,10 @@
 #else
 #include <windows.h>
 
+#ifndef ENABLE_VIRTUAL_TERMINAL_PROCESSING
+#define ENABLE_VIRTUAL_TERMINAL_PROCESSING 0x0004
+#endif
+
 static HANDLE stdoutHandle;
 static DWORD stdoutModeCurrent;
 
@@ -124,7 +128,7 @@ constexpr char const *tokens[] = {
     "while", "for",
     "return",
     "input", "get_c",
-    "get_i", "get_s",
+    "get_i", "gets",
     "get_d", "get_b",
     "func",
     "identifier",
@@ -185,7 +189,7 @@ enum OpCode {
     local_get_d,
     get_c,
     get_i,
-    get_s,
+    get_str,
     get_d,
     local_get_c_ref,
     local_get_i_ref,
@@ -273,7 +277,7 @@ constexpr char const *instructions[] = {
     "local_get_d",
     "get_c",
     "get_i",
-    "get_s",
+    "get_str",
     "get_d",
     "local_get_c_ref",
     "local_get_i_ref",
@@ -413,6 +417,7 @@ struct Value {
             case Nil_v:
                 return false;
         }
+        return false;
     }
 
     static void escape_string(FILE *des, char const *str, i32_t length) {
@@ -982,8 +987,8 @@ void disassemble_instruction(i32_t &offset) {
             std::fprintf(stderr, "%20s\t%4d\n", instructions[get_i], get_double_byte_index(++offset));
             offset += 1;
             break;
-        case get_s:
-            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_s], get_double_byte_index(++offset));
+        case get_str:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[get_str], get_double_byte_index(++offset));
             offset += 1;
             break;
         case get_d:
@@ -1410,6 +1415,10 @@ void skip_whitespace(bool save_line = true) {
             case ' ':
             case '\t':
             case '\v':
+            case '\r':
+            case '\f':
+            case '\a':
+            case '\b':
                 break;
             case '/':
                 if (peek_next_c() == '/') {
@@ -4096,7 +4105,7 @@ bool interpret() {
         return false;
     }
     auto end = std::chrono::system_clock::now();
-    std::cout << "compile time: " << duration_cast<std::chrono::seconds>(end - start).count() << "s\n";
+    std::cout << "compile time: " << std::chrono::duration_cast<std::chrono::seconds>(end - start).count() << "s\n";
    
 
     if (main_addr == -1) {

@@ -3,6 +3,20 @@
 NoobC is a very minimal language with very limited capabilities. It has C like syntax, with slight
 touch of python. Very easy to learn and use. And also it is fast.
 
+## New Changes
+Date: 12.04.2021
+- Support for windows newline encoding
+- Support for windows console colors
+    - If now any error occurs, in windows, errors will be printind in colors as like linux
+- Removed all scanfs, so that msvc doesn't give any warnings
+
+## New Features
+- Support for prefix increment operator and prefix decrement operator
+- New ``string`` type
+- Support for string inputs
+- Support for local arrays
+- Runtime input error checking for integers and doubles
+
 # Syntax
 
 Very C like syntax, with some strict syntax rules.
@@ -17,6 +31,8 @@ Very C like syntax, with some strict syntax rules.
     var null = nil;
     string str[15] = "new string type"; // New string type has been added
                                         // Size of the string has to be known at compile time.
+                                        // NOTE: no need for 1 extra space for null character,
+                                        // ncc, handles that internally
 
 ```
 
@@ -43,7 +59,7 @@ Very C like syntax, with some strict syntax rules.
         - -- (same as prefix increment operator) (new)
         - -  (same as prefix increment operator)
         - +  (same as prefix increment operator)
-        - !  (defined for all type od data) 
+        - !  (defined for all type of data) 
 
 (``NOTE``: All binary operators expectes both operand to be of same type. Otherwise it is a
 runtime error)
@@ -56,7 +72,8 @@ runtime error)
 
     func examples() {
         // Local scope
-        var variable; // Variable shadowing is supported. global 
+        var variable; // Variable shadowing is supported. global scope 'variable' has been shadowed by local
+                      // scope 'variable'
         var variable = 100; // Error. cannot declare variables with same name in same scope
         variable = "variable"; // Variables can be initialised with any type of data    
     }
@@ -77,13 +94,13 @@ runtime error)
 
 ## Control Statements
 ```go
-    for (var i = 0; i < 100; i = i + 1) {   // As like if conditionals, braces are must
+    for (var i = 0; i < 100; ++i) {   // As like if conditionals, braces are must
         ;   // This semicolon can be omitted. Body of the for loop can be empty.
     }
     
     var i = 0;
     while (i < 100) {
-        i = i + 1;
+        ++i;
     }
 
 ```
@@ -94,6 +111,7 @@ runtime error)
 ```go
    // Functions are always defined with 'func' keyword
    // Argument list can be empty. If contains any argument, only the name of the argument is required.
+   // function body can not be empty
     func fib(n) {
         if (n < 2) {
             return n;
@@ -113,10 +131,10 @@ In NoobC, array has been added.
         print("a[{i]]: {a[i]}\n");      // arrays are indexable
     }
 
-    a[12] = "NoobC";    // arrays are indexable. And yes, the can store any value
+    a[12] = "NoobC";    // And yes, arrays can store any value
 
 ```
-(``NOTE``: arrays can only be of size 2 to 255. I will try to increase that later.)
+(``NOTE``: arrays can only be of size 2 to 255. I will try to increase that later. Only local scope arrays are supported for now)
 
 
 ## Strings (new)
@@ -133,7 +151,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
     demo[1] = 'M';  // strings are indexable
     print("demo: {demo}\n"); // output: `demo: MoobC`
 ```
-(``NOTE``: As like array, ``strings`` can also be of size 2 to 255. Only local scope arrays are supported fow now)
+(``NOTE``: As like array, ``strings`` can also be of size 2 to 255. Only local scope strings are supported fow now)
 
 ## Builtin Functions
 
@@ -159,12 +177,14 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
                     // Gets a string from stdin until it founds any one of the following constraints:
                     // 1. 100 characters were read
                     // 2. space or tab or newline or eof was found
+                    // NOTE: ncc automatically adds a null character at the end of the string,
+                    // no need to allocte an extra space for null character
 
         gets(a);    // Error! gets only accepts data of type string
     }
 
 ```
-(``NOTE``: String inputs are not supported yet. Only local scope strings are supported for now)
+(``NOTE``: Only local scope strings are supported for now)
 
 ## Refenrences (new)
 
@@ -181,7 +201,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
 
     func main() {
         var a;
-        get_integer_without_ref(a);     // 100 will be the input
+        get_integer_without_ref(a);     // If 100 is the input
         print("Without reference: {a}\n\n");    // output: `Without reference: nil`
 
         get_integer_with_ref(&a);   // to pass by reference, & have to be prefixed
@@ -191,7 +211,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
 ```
 
 (``NOTE``: Functions cannot take arrays as argument yet. Only local variables support reference.
-global variable reference is not yet supported)
+Global variable reference is not yet supported)
 
 ## How Fast is it?
 
@@ -217,8 +237,7 @@ If ncc is compiled with all g++/clang++ optimization on. This code execution fin
 
 This is a total mess. I haven't yet organised the code base. But here is a rough sketch of
 how to inspect the code
-```
-    - main()
+- main()
     - interpret()
         - compile()
             - parse_functions()
@@ -227,5 +246,5 @@ how to inspect the code
                     - parse_variable_declaration()
                     - parse_statement()
         - run_vm()
-```
-All compilation happens in compile command and runtime starts at run_vm() function.
+
+All compilation happens in compile() function and runtime starts at run_vm() function.
