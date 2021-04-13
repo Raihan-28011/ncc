@@ -3014,12 +3014,13 @@ void parse_variable_declaration(bool consume_semicolon) {
     u8_t count = 1;
 
     auto tok = peek_token();
-    auto index = cur_local_index++;
+    auto index = cur_local_index;
+    auto save_cur_index = cur_local_index + 1;
     if (tok == LeftSquare) {
         consume(LeftSquare);
         consume(Integer);
         count = to_i64(text, text_len);
-        cur_local_index = index + count;
+        save_cur_index = index + count;
         is_array = true;
         if (count < 2 || count >= UINT8_MAX) {
             compile_error = true;
@@ -3064,6 +3065,7 @@ void parse_variable_declaration(bool consume_semicolon) {
         }
     }
     
+    cur_local_index = save_cur_index;
     define_variable(identifier, identifier_len, save_line, count, index);
     if (consume_semicolon)
         consume(Semicolon);
@@ -3131,7 +3133,7 @@ void parse_function_declaration() {
             consume(RightSquare);
         }
         locals.push(cur_scope_depth, identifier, identifier_len, count, cur_local_index++);
-        if (refs.back() > 1)
+        if (refs.back() >= 1)
             locals.back().reference = true;
         ++arguments;
         tok = peek_token();
@@ -3168,12 +3170,13 @@ void parse_function_declaration() {
 
     i32_t address = code.size();
     functions.declare(func_name, func_name_len, address, arguments, std::move(refs));
-    emit_single_byte(ipush_bp);
     OpCode return_value = ret;
     if (func_name_len == 4 && std::strncmp(func_name, "main", 4) == 0) {
         main_addr = address;
         return_value = main_ret;
     }
+    if (main_addr == -1)
+        emit_single_byte(ipush_bp);
 
     while (tok != RightBrace && tok != Eof) {
         parse_declaration(tok);
@@ -3193,7 +3196,8 @@ void parse_function_declaration() {
     for (i8_t i = 0; i < arguments; ++i)
         locals.pop();
 
-    emit_single_byte(ipop_bp);
+    if (main_addr == -1)
+        emit_single_byte(ipop_bp);
     emit_single_byte(return_value); 
 }
 
