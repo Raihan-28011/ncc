@@ -13,6 +13,7 @@ Date: 12.04.2021
 ## New Features
 Date: 13.04.2021
 - Support for arrays as function arguments
+- Type casting
 
 Date: 12.04.2021
 - Support for prefix increment operator and prefix decrement operator
@@ -247,6 +248,26 @@ And also, it is memory efficient and also removes the complexity of copying data
 
 (``NOTE``: Functions cannot take arrays as argument yet. Only local variables support reference.
 Global variable reference is not yet supported)
+
+## Type casting (new)
+
+Very C similar syntax. The type in which you want to convert the resulting value, you have to specify that type in
+parenthesis. 4 types are supported.
+- int_t
+- double_t
+- char_t
+- bool_t 
+
+```go
+    func main() {
+        print("converting 100 to double: {(double_t)(100)}\n"); // 100.000000
+        print("converting 98.12 to char: {(char_t)(98.12)}\n"); // b
+        print("converting true to int: {(int_t)(true)}\n");     // 1
+        print("converting nil to bool: {(bool_t)(nil)}\n");     // false
+        print("error: {(int_t)("raihan")}\n");  // this will cause an error
+    }
+
+```
 
 ## How Fast is it?
 

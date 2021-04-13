@@ -101,6 +101,11 @@ enum TokenKind {
     Get_S, Get_D, Get_B,
     Func,
     String_Type,
+    Int_t,
+    Double_t,
+    Char_t,
+    Bool_t,
+    Nil_t,
     Identifier,
     FuncIdentifier,
     Reference,
@@ -131,6 +136,11 @@ constexpr char const *tokens[] = {
     "get_i", "gets",
     "get_d", "get_b",
     "func",
+    "Int_t",
+    "Double_t",
+    "Char_t",
+    "Bool_t",
+    "Nil_t",
     "identifier",
     "function name",
     "&",
@@ -234,6 +244,12 @@ enum OpCode {
 
     store_ret_value,
     load_ret_value,
+
+    cast_to_int,
+    cast_to_double,
+    cast_to_char,
+    cast_to_bool,
+
     ret,
     main_ret
 };
@@ -327,6 +343,12 @@ constexpr char const *instructions[] = {
 
     "store_ret_value",
     "load_ret_value",
+
+    "cast_to_int",
+    "cast_to_double",
+    "cast_to_char",
+    "cast_to_bool",
+
     "ret",
     "main_ret"
 };
@@ -1166,6 +1188,18 @@ void disassemble_instruction(i32_t &offset) {
             offset += 1;
             std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
+        case cast_to_int:
+            single_byte_instruction(cast_to_int);
+            break;
+        case cast_to_double:
+            single_byte_instruction(cast_to_double);
+            break;
+        case cast_to_char:
+            single_byte_instruction(cast_to_char);
+            break;
+        case cast_to_bool:
+            single_byte_instruction(cast_to_bool);
+            break;
         case ret:
             single_byte_instruction(ret);
             break;
@@ -1659,6 +1693,8 @@ TokenKind identifier_token() {
         case 'i':
             if (text_len == 2 && *(text+1) == 'f')
                 kind = If;
+            else if (text_len == 5 && std::strncmp(text+1, "nt_t", 4) == 0)
+                kind = Int_t;
             else if (text_len == 5 && std::strncmp(text+1, "nput", 4) == 0)
                 kind = Input;
             break;
@@ -1683,6 +1719,18 @@ TokenKind identifier_token() {
         case 's':
             if (text_len == 6 && std::strncmp(text+1, "tring", 5) == 0)
                 kind = String_Type;
+            break;
+        case 'd':
+            if (text_len == 8 && std::strncmp(text+1, "ouble_t", 7) == 0)
+                kind = Double_t;
+            break;
+        case 'c':
+            if (text_len == 6 && std::strncmp(text+1, "har_t", 5) == 0)
+                kind = Char_t;
+            break;
+        case 'b':
+            if (text_len == 6 && std::strncmp(text+1, "ool_t", 5) == 0)
+                kind = Bool_t;
             break;
         default:
             break;
@@ -2167,8 +2215,30 @@ void parse_primary_expression() {
             emit_value(string_c, Value(text+1, text_len - 2));
             break;
         case LeftParen:
-            parse_assignment();
-            consume(RightParen);
+            {
+                auto tok = peek_token();
+                bool is_cast = false;
+                if (tok == Int_t || tok == Double_t || tok == Char_t || tok == Bool_t) {
+                    gettoken();
+                    consume(RightParen);
+                    consume(LeftParen);
+                    is_cast = true;
+                }
+
+                parse_assignment();
+                consume(RightParen);
+                
+                if (is_cast) {
+                    switch (tok) {
+                        case Int_t: emit_single_byte(cast_to_int); break;
+                        case Double_t: emit_single_byte(cast_to_double); break;
+                        case Char_t: emit_single_byte(cast_to_char); break;
+                        case Bool_t: emit_single_byte(cast_to_bool); break;
+                        default:
+                            break;
+                    }
+                }
+            }
             break;
         case Identifier:
             {
@@ -4202,6 +4272,69 @@ runtime_start:
                     *(bp + index - (*(bp + index)).as_int() + array_index) = val;
                     pop();
                     push(val);
+                }
+                break;
+            case cast_to_int:
+                {
+                    if (peek().is_int())
+                        break;
+                    auto val = pop();
+                    if (val.is_bool()) {
+                        push(as_t<i64_t>(val.as_bool() ? 1 : 0));
+                    } else if (val.is_double()) {
+                        push(as_t<i64_t>(val.as_double()));
+                    } else if (val.is_char()) {
+                        push(as_t<i64_t>(val.as_char()));
+                    } else if (val.is_nil()) {
+                        push(as_t<i64_t>(0));
+                    } else {
+                        runtime_error("invalid conveersion to <integer>, types are not compatible", offset);
+                        return false;
+                    }
+                }
+                break;
+            case cast_to_double:
+                {
+                    if (peek().is_double())
+                        break;
+                    auto val = pop();
+                    if (val.is_int()) {
+                        push(as_t<double>(val.as_int()));
+                    } else if (val.is_bool()) {
+                        push(as_t<double>(val.as_bool() ? 1 : 0));
+                    } else if (val.is_char()) {
+                        push(as_t<double>(val.as_char()));
+                    } else if (val.is_nil()) {
+                        push(0.0);
+                    } else {
+                        runtime_error("invalid conversion to <double>, types are not compatible", offset);
+                        return false;
+                    }
+                }
+                break;
+            case cast_to_char:
+                {
+                    if (peek().is_char())
+                        break;
+                    auto val = pop();
+                    if (val.is_int()) {
+                        push(as_t<char>(val.as_int()));
+                    } else if (val.is_double()) {
+                        push(as_t<char>(val.as_double()));
+                    } else if (val.is_nil()) {
+                        push('\0');
+                    } else {
+                        runtime_error("invalid conversion to <character>, types are not compatible", offset);
+                        return false;
+                    }
+                }
+                break;
+            case cast_to_bool:
+                {
+                    if (peek().is_bool())
+                        break;
+                    auto val = pop();
+                    push(val.as_bool());
                 }
                 break;
             case ret:
