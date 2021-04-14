@@ -4,6 +4,9 @@ NoobC is a very minimal language with very limited capabilities. It has C like s
 touch of python. Very easy to learn and use. And also it is fast.
 
 ## New Changes
+Date 14.04.2021
+- I have decided to not support global arrays and global strings. If I get better idea to implement them, I might do them. Otherwise its a no.
+
 Date: 12.04.2021
 - Support for windows newline encoding
 - Support for windows console colors
@@ -11,6 +14,10 @@ Date: 12.04.2021
 - Removed all scanfs, so that msvc doesn't give any warnings
 
 ## New Features
+Date 14.04.2021
+- Functions now support strings as argument
+    - Read the 'Reference to strings' section for more info
+
 Date: 13.04.2021
 - Support for arrays as function arguments
 - Type casting
@@ -139,7 +146,7 @@ In NoobC, array has been added.
     a[12] = "NoobC";    // And yes, arrays can store any value
 
 ```
-(``NOTE``: arrays can only be of size 2 to 255. I will try to increase that later. Only local scope arrays are supported for now)
+(``NOTE``: arrays can only be of size 2 to 255. I will try to increase that later.)
 
 
 ## Strings (new)
@@ -156,7 +163,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
     demo[0] = 'M';  // strings are indexable
     print("demo: {demo}\n"); // output: `demo: MoobC`
 ```
-(``NOTE``: As like array, ``strings`` can also be of size 2 to 255. Only local scope strings are supported fow now)
+(``NOTE``: As like array, ``strings`` can also be of size 2 to 255)
 
 ## Builtin Functions
 
@@ -189,7 +196,6 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
     }
 
 ```
-(``NOTE``: Only local scope strings are supported for now)
 
 ## Refenrence (new)
 
@@ -215,7 +221,7 @@ In NoobC, ``string`` is a new type. It is assignable, printable and indexable.
     }
 
 ```
-### Reference to local arrays (new)
+### Reference to arrays (new)
 Now functions support, arrays as arguments. But, they are only reference. Because, arrays in NoobC, are not copyable or assignable.
 And also, it is memory efficient and also removes the complexity of copying datas into new array.
 ```go
@@ -243,11 +249,37 @@ And also, it is memory efficient and also removes the complexity of copying data
     }
 
 ```
-(``NOTE``: global arrays are still not supported)
+(``NOTE``: global arrays will not be implemented any sooner)
 
+## Reference to strings (new)
 
-(``NOTE``: Functions cannot take arrays as argument yet. Only local variables support reference.
-Global variable reference is not yet supported)
+```go
+    func get_string(&str[100], delimeter) {
+        var c;
+        getc(c);
+        var i = 0;
+        while (c != delimeter && i < 100) {
+            str[i] = c;
+            getc(c);
+            ++i;
+        }
+        str[i] = '\0';
+    }
+
+    func main() {
+        string name[99];
+        print("Enter a name: ");
+<<<<<<< HEAD
+        get_string(&name, '\n');    // To pass strings as arguments, they have to be of the size 1 less than the argument that the called
+                                    // function has been defined with
+=======
+        get_string(&name);      // To pass strings as arguments, they have to be of the size 1 less than the argument that the called
+                                // function has been defined with
+>>>>>>> 7d18c642f7ff4b20c5f10f6ddcddd6af7a55e155
+        print("Hello {name}\n");
+    }
+
+```
 
 ## Type casting (new)
 

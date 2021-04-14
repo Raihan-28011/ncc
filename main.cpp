@@ -234,13 +234,17 @@ enum OpCode {
     set_string_index,
     get_string,
 
+    load_array_ref,
+    get_array_ref,
+    set_array_ref,
+    /*geti_array_ref,*/
+    /*getc_array_ref,*/
+    /*getd_array_ref,*/
+
+
     load_arg_array_ref,
     get_arg_array_ref,
     set_arg_array_ref,
-    geti_arg_array_ref,
-    getc_arg_array_ref,
-    getd_arg_array_ref,
-
 
     store_ret_value,
     load_ret_value,
@@ -334,12 +338,16 @@ constexpr char const *instructions[] = {
     "set_string_index",
     "get_string",
 
+    "load_array_ref",
+    "get_array_ref",
+    "set_array_ref",
+    /*"geti_array_ref",*/
+    /*"getc_array_ref",*/
+    /*"getd_array_ref",*/
+
     "load_arg_array_ref",
     "get_arg_array_ref",
     "set_arg_array_ref",
-    "geti_arg_array_ref",
-    "getc_arg_array_ref",
-    "getd_arg_array_ref",
 
     "store_ret_value",
     "load_ret_value",
@@ -727,13 +735,13 @@ struct Function {
     i32_t length;
     i32_t address;
     i8_t arguments;
-    vector<i8_t> argumets_with_ref;
+    vector<u8_t> argumets_with_ref;
 };
 
 struct Functions {
     Functions() = default;
 
-    bool defined(char const *name, i32_t length, i32_t &address, i8_t &arguments, vector<i8_t> &refs) {
+    bool defined(char const *name, i32_t length, i32_t &address, i8_t &arguments, vector<u8_t> &refs) {
         for (auto func = functions.begin(); func != functions.end(); ++func) {
             if (func->length == length &&
                     std::strncmp(func->name, name, length) == 0) {
@@ -750,12 +758,12 @@ struct Functions {
     bool defined(char const *name, i32_t length) {
         i32_t address;
         i8_t arguments;
-        vector<i8_t> dummy;
-        vector<i8_t> &refs = dummy;
+        vector<u8_t> dummy;
+        vector<u8_t> &refs = dummy;
         return defined(name, length, address, arguments, refs);
     }
 
-    bool declare(char const *name, i32_t length, i32_t address, i8_t arguments, vector<i8_t> &&refs) {
+    bool declare(char const *name, i32_t length, i32_t address, i8_t arguments, vector<u8_t> &&refs) {
         if (defined(name, length))
             return false;
         functions.push_back({name, length, address, arguments, std::move(refs)});
@@ -1174,17 +1182,21 @@ void disassemble_instruction(i32_t &offset) {
             offset += 1;
             std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
+        case load_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\n", instructions[load_array_ref], get_double_byte_index(++offset));
+            offset += 1;
+            break;
         case load_arg_array_ref:
             std::fprintf(stderr, "%20s\t%4d\n", instructions[load_arg_array_ref], get_double_byte_index(++offset));
             offset += 1;
             break;
-        case get_arg_array_ref:
-            std::fprintf(stderr, "%20s\t%4d\t", instructions[get_arg_array_ref], get_double_byte_index(++offset));
+        case get_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[get_array_ref], get_double_byte_index(++offset));
             offset += 1;
             std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
-        case set_arg_array_ref:
-            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_arg_array_ref], get_double_byte_index(++offset));
+        case set_array_ref:
+            std::fprintf(stderr, "%20s\t%4d\t", instructions[set_array_ref], get_double_byte_index(++offset));
             offset += 1;
             std::fprintf(stderr, "%4u\n", code.at(++offset));
             break;
@@ -2066,8 +2078,8 @@ i16_t index_of(char const *text, i32_t length, bool &is_global, bool &reference,
 void function_call() {
     i32_t address;
     i8_t arguments;
-    vector<i8_t> dummy;
-    vector<i8_t> &refs = dummy;
+    vector<u8_t> dummy;
+    vector<u8_t> &refs = dummy;
     if (!functions.defined(text, text_len, address, arguments, refs)) {
         undefined_reference();
         TokenKind tok;
@@ -2130,8 +2142,8 @@ void function_call() {
             }
 
             OpCode op = (is_global ? load_global_ref : load_local_ref);
-            index = (!is_global ? cur_local_index - index : index);
-            if (refs.at(argument_count) > 1) {
+            /*index = (!is_global ? cur_local_index - index : index);*/
+            if (refs.at(argument_count) >= 1) {
                 if (count <= 1) {
                     error_header(line);
                     std::fprintf(stderr, "expected reference to an array");
@@ -2148,8 +2160,11 @@ void function_call() {
                     std::fprintf(stderr, BOLD_PURBLE "NOTE" NORMAL ": function expects argument to be an array of size %u\n\n", refs.at(argument_count));
                     return;
                 }
-
-                op = load_arg_array_ref;
+                if (index >= 0) {
+                    op = load_array_ref;
+                } else {
+                    op = load_arg_array_ref;
+                }
             }
             emit_three_bytes(op, index);
             goto balance_label;
@@ -2279,7 +2294,7 @@ void parse_primary_expression() {
                     op = get_local_array;
 
                     if (reference)
-                        op = get_arg_array_ref;
+                        op = get_array_ref;
 
                     emit_array_indexing(op, index, count);
                     break;
@@ -2596,7 +2611,7 @@ void parse_assignment(i8_t parentPrecedence) {
             return;
         }
         /* TODO: support global array */
-        OpCode op = (!reference ? set_local_array : set_arg_array_ref);
+        OpCode op = (!reference ? set_local_array : set_array_ref);
         emit_array_indexing(op, index, count);
     } else {
         parse_expression(parentPrecedence);
@@ -2644,10 +2659,18 @@ void parse_print_arguments() {
                 text = text + i + 1;
                 text_len -= i + 1;
 
+                auto tok = peek_token();
+                /*if (tok == FuncIdentifier) {*/
+                    /*cur_local_index += print_arguments;*/
+                /*}*/
                 /* parse th expression in the print argument */
                 /* print("hello {"world"}\n"); */
                 /* parse_assignment will parse the '"world"' expression */
                 parse_assignment();
+
+                /*if (tok == FuncIdentifier) {*/
+                    /*cur_local_index -= print_arguments;*/
+                /*}*/
 
                 if (parse_error || compile_error) {
                     auto tok = peek_token();
@@ -2936,6 +2959,36 @@ void parse_return_statement() {
     }
     consume(Semicolon);
     emit_single_byte(store_ret_value);
+    auto &local_vars = locals.variables;
+    if (local_vars.size() > 0) {
+        if (cur_local_index > 0) {  // if return statement is in somewhere inner blocks
+            for (auto i = 1; local_vars.size() >= i; ++i) {
+                auto local = local_vars.at(local_vars.size() - i);
+                if (!(local.scope > 0 && local.index >= 0)) {
+                    break;
+                }
+                if (local.count > 1) {
+                    for (i32_t j = 0; j < local.count; ++j)
+                        emit_single_byte(ipop);
+                } else {
+                    emit_single_byte(ipop);
+                }
+            }
+        } else {    // if return statement is in the initial scope of the function
+            for (auto i = 1; local_vars.size() >= i; ++i) {
+                auto local = local_vars.at(local_vars.size() - i);
+                if (!(local.scope == 1 && local.index >= 0)) {
+                    break;
+                }
+                if (local.count > 1) {
+                    for (i32_t j = 0; j < local.count; ++j)
+                        emit_single_byte(ipop);
+                } else {
+                    emit_single_byte(ipop);
+                }
+            }
+        }
+    }
     emit_jump(jump);
     exit_addrs.push_back(code.size());
 }
@@ -3173,7 +3226,7 @@ void parse_function_declaration() {
 
     i8_t arguments = 0;
     auto tok = peek_token();
-    vector<i8_t> refs;
+    vector<u8_t> refs;
     while (tok != RightParen && tok != Eof) {
         if (tok == Reference) {
             consume(Reference);
@@ -3214,10 +3267,12 @@ void parse_function_declaration() {
     }
     consume(RightParen);
 
+    auto last_arg_index = -1;
     if (arguments > 0) {
         for (i8_t i = 0; i < arguments; ++i) {
             auto &local = locals[arguments - 1 - i];
             local.index = -(2 + arguments - i);
+            last_arg_index = local.index;
         }
 
         cur_local_index = 0;
@@ -3245,8 +3300,7 @@ void parse_function_declaration() {
         main_addr = address;
         return_value = main_ret;
     }
-    if (main_addr == -1)
-        emit_single_byte(ipush_bp);
+    emit_single_byte(ipush_bp);
 
     while (tok != RightBrace && tok != Eof) {
         parse_declaration(tok);
@@ -3254,20 +3308,40 @@ void parse_function_declaration() {
     }
     consume(RightBrace);
     if (!exit_addrs.empty()) {
-        for (auto &exit_function: exit_addrs)
+        for (auto &exit_function: exit_addrs) {
             set_correct_code_address(code.size(), exit_function);
+        }
         exit_addrs.clear();
     }
     if (!return_found) {
         emit_value(int_c, as_t<i64_t>(0));
         emit_single_byte(store_ret_value);
+        auto &local_vars = locals.variables;
+        if (local_vars.size() > 0) {
+            for (auto i = 1; local_vars.size() >= i; ++i) {
+                auto local = local_vars.at(local_vars.size() - i);
+                if (!(local.scope > 0 && local.index >= 0)) {
+                    break;
+                }
+                if (local.count > 1) {
+                    for (i32_t j = 0; j < local.count; ++j)
+                        emit_single_byte(ipop);
+                } else {
+                    emit_single_byte(ipop);
+                }
+            }
+        }
     }
-    end_new_scope();
+
+    while (locals.variables.size() > 0 && cur_local_index > 0) {
+        --cur_local_index;
+        locals.pop();
+    }
+    cur_scope_depth = 0;
     for (i8_t i = 0; i < arguments; ++i)
         locals.pop();
 
-    if (main_addr == -1)
-        emit_single_byte(ipop_bp);
+    emit_single_byte(ipop_bp);
     emit_single_byte(return_value); 
 }
 
@@ -4220,21 +4294,35 @@ runtime_start:
                     auto count = *ip++;
                     temp_length = 0;
                     for (i32_t i = 0; i < count - 1; ++i) {
-                        temp[i] = as_t<char>((*(bp + index + i)).as_char());
+                        if (!(bp + index + i)->is_char()) {
+                            runtime_error("string has data other than <characters>", offset);
+                            return false;
+                        }
+
+                        char c = as_t<char>((*(bp + index + i)).as_char());
+                        temp[i] = c;
                         ++temp_length;
                     }
                     temp[temp_length] = '\0';
                     push(StringLiteral{temp, temp_length});
                 }
                 break;
+            case load_array_ref:
+                {
+                    auto index = get_double_byte_index(ip - code.begin());
+                    ip += 2;
+                    push(as_t<i64_t>((bp + index) - stack.begin()));
+                    /*push(as_t<i64_t>(index));*/
+                }
+                break;
             case load_arg_array_ref:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
-                    push(as_t<i64_t>(index));
+                    push((bp + index)->as_int());
                 }
                 break;
-            case get_arg_array_ref:
+            case get_array_ref:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
@@ -4249,10 +4337,11 @@ runtime_start:
                         runtime_error("out of range index", offset);
                         return false;
                     }
-                    push(*(bp + index - (*(bp + index)).as_int() + array_index));
+                    push(*(stack.begin() + (bp + index)->as_int() + array_index));
+                    /*push(*(bp + index - (*(bp + index)).as_int() + array_index));*/
                 }
                 break;
-            case set_arg_array_ref:
+            case set_array_ref:
                 {
                     auto index = get_double_byte_index(ip - code.begin());
                     ip += 2;
@@ -4269,7 +4358,8 @@ runtime_start:
                     }
 
                     auto val = pop();
-                    *(bp + index - (*(bp + index)).as_int() + array_index) = val;
+                    *(stack.begin() + (bp + index)->as_int() + array_index) = val;
+                    /**(bp + index - (*(bp + index)).as_int() + array_index) = val;*/
                     pop();
                     push(val);
                 }
