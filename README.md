@@ -269,13 +269,8 @@ And also, it is memory efficient and also removes the complexity of copying data
     func main() {
         string name[99];
         print("Enter a name: ");
-<<<<<<< HEAD
         get_string(&name, '\n');    // To pass strings as arguments, they have to be of the size 1 less than the argument that the called
                                     // function has been defined with
-=======
-        get_string(&name);      // To pass strings as arguments, they have to be of the size 1 less than the argument that the called
-                                // function has been defined with
->>>>>>> 7d18c642f7ff4b20c5f10f6ddcddd6af7a55e155
         print("Hello {name}\n");
     }
 
